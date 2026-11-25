@@ -1,0 +1,1695 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Gatitos Aventureros</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #1b1424; overflow: hidden; }
+  html, body { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; }
+  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; image-rendering: pixelated; }
+
+  /* ---------- Controles táctiles (solo en celular / tablet) ---------- */
+  #touch { display: none; position: fixed; inset: 0; pointer-events: none; }
+  body.touch #touch { display: block; }
+  .tbtn { position: absolute; pointer-events: auto; display: flex; align-items: center; justify-content: center;
+          border-radius: 50%; background: rgba(20,12,30,0.35); border: 4px solid rgba(255,217,64,0.75);
+          color: #fff; font: bold 6vmin system-ui, sans-serif; text-shadow: 0 2px 3px rgba(0,0,0,.5);
+          box-shadow: 0 3px 8px rgba(0,0,0,.25); touch-action: none; }
+  .tbtn.on { background: rgba(255,217,64,0.55); border-color: #ffd940; transform: scale(0.94); }
+  #dpad { position: absolute; pointer-events: auto; left: calc(3vmin + env(safe-area-inset-left)); bottom: 4vmin;
+          width: 44vmin; height: 22vmin; display: flex; gap: 2vmin; touch-action: none; }
+  #dpad .half { flex: 1; border-radius: 4vmin; background: rgba(20,12,30,0.35); border: 4px solid rgba(255,217,64,0.75);
+                display: flex; align-items: center; justify-content: center; color: #fff; font: bold 9vmin system-ui, sans-serif;
+                text-shadow: 0 2px 3px rgba(0,0,0,.5); box-shadow: 0 3px 8px rgba(0,0,0,.25); }
+  #dpad .half.on { background: rgba(255,217,64,0.55); border-color: #ffd940; }
+  #bJump { right: calc(3vmin + env(safe-area-inset-right)); bottom: 4vmin; width: 24vmin; height: 24vmin; font-size: 5vmin; }
+  #bDown { right: calc(30vmin + env(safe-area-inset-right)); bottom: 8vmin; width: 16vmin; height: 16vmin; }
+  .small { top: 2.5vmin; width: 10vmin; height: 10vmin; font-size: 4.5vmin; border-radius: 3vmin; }
+  #bFull { right: calc(2.5vmin + env(safe-area-inset-right)); }
+  #bReset { right: calc(14vmin + env(safe-area-inset-right)); }
+  #bMute { right: calc(25.5vmin + env(safe-area-inset-right)); }
+  .lbl { display: block; font-size: 2.6vmin; font-weight: 600; opacity: .9; margin-top: .5vmin; }
+  .stack { display: flex; flex-direction: column; align-items: center; line-height: 1; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="touch">
+  <div id="dpad"><div class="half" data-dir="-1">◀</div><div class="half" data-dir="1">▶</div></div>
+  <div class="tbtn" id="bDown" data-key="ArrowDown"><span class="stack">▼<span class="lbl">golpe</span></span></div>
+  <div class="tbtn" id="bJump" data-key="Space"><span class="stack">⤒<span class="lbl">SALTO</span></span></div>
+  <div class="tbtn small" id="bFull">⛶</div>
+  <div class="tbtn small" id="bReset">↻</div>
+  <div class="tbtn small" id="bMute">♪</div>
+</div>
+<script>
+"use strict";
+// =====================================================================
+//  GATITOS AVENTUREROS — plataformero 2D (versión web del prototipo de Unity)
+//  Unidades: 1 bloque = 1 unidad. Eje Y hacia arriba (como en Unity).
+// =====================================================================
+
+// ------------------------- Configuración -----------------------------
+const G = 9.81 * 3;          // gravedad (Physics2D * gravityScale 3)
+const DT = 1 / 60;
+const CLIMB = 5, GLIDE_FALL = -1.5, WIND_LIFT = 7, POUND = -24, MAX_FALL = -20;
+const VIEW_H = 14;           // bloques visibles en vertical
+
+const WHITE = [1, .98, .95];
+const ORANGE = [1, .58, .2], BLACK = [.1, .1, .12], GRAY = [.5, .53, .6], BROWN = [.55, .4, .27], TABBY = [.6, .49, .36], TORBIE = [.56, .49, .4];
+// Cada gato: colores por zona del cuerpo + manchas (patch) + accesorio opcional.
+//   h cabeza/orejas  b cuerpo y mejillas  t cola  f frente  m hocico  c pecho  a panza  l patas  e ojos
+const CATS = [
+  { name: "Narito", type: "doble", ability: "Doble salto: pulsa Espacio otra vez en el aire.",
+    zone: { h: ORANGE, b: ORANGE, t: ORANGE, f: ORANGE, m: WHITE, c: WHITE, a: WHITE, l: WHITE },
+    stripeBase: ORANGE, stripe: [.8, .38, .08], eye: [.78, .62, .15], outline: [.14, .08, .06],
+    w: .8, h: 1.15, speed: 6.5, jump: 12.5 },
+  { name: "Cowi", type: "pequeno", ability: "Pequeño y ágil: cabe por los túneles bajos.",
+    zone: { h: BLACK, b: BLACK, t: BLACK, f: WHITE, m: WHITE, c: WHITE, a: WHITE, l: WHITE },
+    patch: (x, r) => ((r === 6 && x >= 7 && x <= 8) || (r === 7 && x === 8) || (r === 4 && x === 9) || (r === 5 && x === 8)) ? WHITE : null,
+    eye: [.55, .66, .5], outline: [.42, .42, .52],
+    w: .6, h: .55, speed: 6.8, jump: 11.5 },
+  { name: "Punkero", type: "golpe", ability: "Golpe pesado: S / Abajo en el aire. Rompe suelos agrietados.",
+    zone: { h: GRAY, b: GRAY, t: GRAY, f: GRAY, m: WHITE, c: WHITE, a: WHITE, l: [.62, .64, .7] },
+    patch: (x, r) => (r === 5 && x === 10) ? WHITE : null,
+    eye: [.88, .85, .3], outline: [.12, .1, .14],
+    acc: { rows: [
+      "", "", "", "", "", "", "", "", "", "", "",
+      "......ksksksk...",
+    ], pal: { k: [.12, .1, .14], s: [.85, .87, .92] } },
+    w: .95, h: 1.2, speed: 5.2, jump: 11.5 },
+  { name: "Rockera", type: "trepa", ability: "Trepa rascadores: camina contra el muro y sube sola.",
+    zone: { h: TABBY, b: TABBY, t: TABBY, f: TABBY, m: [.94, .87, .76], c: [.94, .87, .76], a: [.8, .71, .58], l: [.64, .54, .42] },
+    patch: (x, r) => (r === 6 && x === 8) || (r === 7 && x >= 7 && x <= 8) ? [.94, .87, .76] : null,
+    stripeBase: TABBY, stripe: [.2, .15, .1], eye: [.6, .66, .3], outline: [.12, .08, .06],
+    w: .8, h: 1.15, speed: 6.5, jump: 12 },
+  { name: "Rapera", type: "planea", ability: "Planea: mantén Espacio al caer. El viento la eleva.",
+    zone: { h: TORBIE, b: TORBIE, t: TORBIE, f: TORBIE, m: [.86, .74, .58], c: [.74, .62, .48], a: [.7, .58, .45], l: [.6, .5, .4] },
+    // manchas color jengibre mezcladas (gata atigrada carey)
+    patch: (x, r) => (r >= 1 && r <= 11 && (x * 7 + r * 3) % 5 === 0 && !(x >= 8 && r >= 4 && r <= 9)) ? [.8, .52, .28] : (r === 6 && x === 8 ? [.86, .74, .58] : null),
+    stripeBase: TORBIE, stripe: [.24, .19, .15], eye: [.62, .68, .3], outline: [.12, .08, .06],
+    acc: { rows: [
+      "", "", "", "", "", "", "", "", "", "", "",
+      ".......vvvvvv...",
+      "..........V.....",
+    ], pal: { v: [.55, .3, .85], V: [.8, .7, 1] } },
+    w: .8, h: 1.1, speed: 5.8, jump: 12 },
+];
+CATS.forEach(d => d.body = d.zone.h);   // color principal (HUD y efectos)
+
+// ------------------------- Utilidades -------------------------------
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const moveTowards = (a, b, d) => Math.abs(b - a) <= d ? b : a + Math.sign(b - a) * d;
+const lerp = (a, b, t) => a + (b - a) * t;
+const rand = (a, b) => a + Math.random() * (b - a);
+function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const rgba = (c, a) => `rgba(${Math.round(c[0] * 255)},${Math.round(c[1] * 255)},${Math.round(c[2] * 255)},${a === undefined ? (c[3] === undefined ? 1 : c[3]) : a})`;
+const shade = (c, k) => [c[0] * k, c[1] * k, c[2] * k];
+
+// ------------------------- Arte (pixel art por código) ---------------
+// Cada sprite es un canvas + pivote (px, py) con py medido desde abajo, como en Unity.
+function makeSprite(w, h, pixels, pivot) {
+  const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+  const cx = cv.getContext("2d"); const img = cx.createImageData(w, h);
+  for (let i = 0; i < w * h; i++) {
+    const c = pixels[i]; if (!c) continue;
+    img.data[i * 4] = c[0] * 255; img.data[i * 4 + 1] = c[1] * 255; img.data[i * 4 + 2] = c[2] * 255;
+    img.data[i * 4 + 3] = (c[3] === undefined ? 1 : c[3]) * 255;
+  }
+  cx.putImageData(img, 0, 0);
+  return { img: cv, w, h, px: pivot ? pivot[0] : .5, py: pivot ? pivot[1] : .5 };
+}
+function outline(px, w, h, oc) {
+  const src = px.slice();
+  const on = i => src[i] && (src[i][3] === undefined || src[i][3] > 0.01);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x; if (on(i)) continue;
+    if ((x > 0 && on(i - 1)) || (x < w - 1 && on(i + 1)) || (y > 0 && on(i - w)) || (y < h - 1 && on(i + w))) px[i] = oc;
+  }
+}
+// Filas de texto (fila 0 = arriba)
+function pattern(rows, pal, pivot, oc) {
+  let w = 0; for (const r of rows) w = Math.max(w, r.length);
+  let h = rows.length; const off = oc ? 1 : 0; if (oc) { w += 2; h += 2; }
+  const px = new Array(w * h).fill(null);
+  rows.forEach((r, ri) => { for (let x = 0; x < r.length; x++) if (pal[r[x]]) px[(ri + off) * w + x + off] = pal[r[x]]; });
+  if (oc) outline(px, w, h, oc);
+  return makeSprite(w, h, px, pivot);
+}
+// Procedural con y medida desde abajo (igual que la versión C#)
+function proc(w, h, fn, pivot, oc) {
+  const px = new Array(w * h).fill(null);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const c = fn(x, y); if (c) px[(h - 1 - y) * w + x] = c; }
+  if (oc) outline(px, w, h, oc);
+  return makeSprite(w, h, px, pivot);
+}
+
+const CAT_ROWS = [            // 14 filas; el sprite tiene 3 filas extra arriba para accesorios
+  "................",
+  "......h......h..",
+  "......hh....hh..",
+  "t.....hihhhhih..",
+  "t.....hhhhffhh..",
+  ".t....bbbeffeb..",
+  ".t....bbbmmnmm..",
+  "..t...bbbmmmmb..",
+  "..bbbbbbccccbb..",
+  "..bbbbaaaaaccb..",
+  "..bbbbaaaaaaab..",
+  "..bbbbbbbbbbbb..",
+  "..ll.ll..ll.ll..",
+  "..ll.ll..ll.ll..",
+];
+const CAT_TOP = 3, CAT_SH = 17;
+function catSprite(d) {
+  const w = 16, h = CAT_SH, px = new Array(w * h).fill(null), pink = [1, .6, .7];
+  for (let r = 0; r < h; r++) for (let x = 0; x < w; x++) {
+    const tr = r - CAT_TOP; const ch = tr >= 0 ? (CAT_ROWS[tr][x] || ".") : "."; let c = null;
+    if (d.zone[ch]) {
+      c = d.zone[ch];
+      const p = d.patch ? d.patch(x, tr) : null; if (p) c = p;
+      if (d.stripeBase && c === d.stripeBase && "bht".includes(ch) && tr >= 1 && tr <= 11 && x % 3 === 1) c = d.stripe;
+      if (ch === "l") c = shade(c, .92);
+    }
+    else if (ch === "e") c = d.eye; else if (ch === "n" || ch === "i") c = pink;
+    px[r * w + x] = c;
+  }
+  if (d.acc) d.acc.rows.forEach((row, r) => { for (let x = 0; x < row.length; x++) if (d.acc.pal[row[x]]) px[r * w + x] = d.acc.pal[row[x]]; });
+  outline(px, w, h, d.outline);
+  return makeSprite(w, h, px, [.5, (14 / 2) / CAT_SH]);
+}
+function dirtColor(r) { const v = r(); if (v < .18) return [.48, .3, .17]; if (v < .23) return [.68, .47, .3]; return [.58, .38, .22]; }
+
+const SPR = {};
+function buildArt() {
+  CATS.forEach(d => d.spr = catSprite(d));
+  let r = rng(11); SPR.dirt = proc(16, 16, () => dirtColor(r));
+  r = rng(12); SPR.grass = proc(16, 16, (x, y) => { const d = dirtColor(r); const wave = ((x * 7) % 5) < 2;
+    if (y === 15) return [.55, .88, .42]; if (y >= 12) return [.36, .75, .3]; if (y === 11 && wave) return [.25, .58, .22]; return d; });
+  r = rng(13); SPR.climb = proc(16, 16, (x, y) => { if (x === 0 || x === 15) return [.5, .33, .18]; if (x === 1 || x === 14) return [.62, .44, .26];
+    const n = r() * .06; return y % 3 === 0 ? [.7 - n, .56 - n, .36 - n] : [.9 - n, .78 - n, .56 - n]; });
+  r = rng(14);
+  const crack = new Set();
+  [[[3, 13], [7, 8]], [[7, 8], [12, 10]], [[7, 8], [6, 3]], [[12, 10], [13, 5]]].forEach(([a, b]) => {
+    for (let t = 0; t <= 1; t += .05) crack.add(Math.round(lerp(a[0], b[0], t)) + "," + Math.round(lerp(a[1], b[1], t))); });
+  SPR.breakable = proc(16, 16, (x, y) => { const n = r() * .06;
+    if (crack.has(x + "," + y)) return [.2, .18, .24];
+    if (x === 0 || y === 0 || x === 15 || y === 15) return [.38, .37, .44];
+    if (x === 1 || y === 14) return [.8, .79, .86]; return [.66 - n, .64 - n, .72 - n]; });
+  r = rng(15); SPR.dark = proc(16, 16, () => { const n = r() * .04; return [.24 - n, .17 - n, .15 - n]; });
+  SPR.spikes = proc(16, 16, (x, y) => { const lx = (x % 8) - 3.5; return y < 10 - Math.abs(lx) * 2.6 ? (lx < 0 ? [.85, .86, .9] : [.62, .63, .7]) : null; }, [.5, 0], [.2, .2, .25]);
+  SPR.fish = pattern(["....bbbb....", "..bbbbbbb..b", ".bebbbbbbbbb", "bbbbbbbbbbb.", ".blllllllbbb", "..bbbbbbb..b", "....bbbb...."],
+    { b: [.38, .7, 1], l: [.75, .9, 1], e: [.08, .1, .2] }, [.5, .5], [.1, .2, .4]);
+  SPR.bell = proc(12, 13, (x, y) => { const dx = x - 5.5, dy = y - 5; let c = null;
+    if (dx * dx + dy * dy <= 22) { c = [1, .82, .18]; if (dx < -1.5 && dy > 1) c = [1, .96, .65]; if (y === 2 && Math.abs(dx) < 3) c = [.4, .28, .05]; }
+    if (y >= 10 && y <= 11 && x >= 3 && x <= 8) c = [.9, .2, .25]; return c; }, [.5, .5], [.35, .2, .05]);
+  SPR.bowl = pattern(["....ffdfffdf....", "..ffdffffdfffd..", "rrrrrrrrrrrrrrrr", "rwwrrrrrrrrrrrrr", ".rrrrrrrrrrrrrr.", "..rrrrrrrrrrrr..", "...rrrrrrrrrr..."],
+    { f: [.62, .42, .22], d: [.45, .28, .14], r: [.92, .25, .32], w: [1, .85, .88] }, [.5, 0], [.3, .05, .1]);
+  SPR.mouse = pattern(["...........gg...", "..........gppg..", ".....ggggggggg..", "....gggggggggeg.", "...ggggggggggggn", "t..gggggggggggg.", ".t.ggggggggggg..", "..tgggggggggg...", "....k.k....k.k.."],
+    { g: [.6, .58, .64], p: [1, .62, .7], e: [.9, .1, .15], k: [.35, .33, .38], t: [.95, .6, .65], n: [1, .45, .55] }, [.5, .5], [.15, .12, .18]);
+  const flag = on => proc(12, 24, (x, y) => { const fc = on ? [.3, .85, .4] : [.7, .7, .75]; let c = null;
+    if (x <= 1 && y < 22) c = [.35, .3, .3]; if (x <= 2 && y >= 22) c = [1, .85, .2];
+    const fy = 21 - y; if (x >= 2 && fy >= 0 && fy <= 7 && x <= 11 - Math.abs(fy - 4)) c = fc; return c; }, [.15, 0]);
+  SPR.flagOff = flag(false); SPR.flagOn = flag(true);
+  SPR.sign = proc(16, 16, (x, y) => { const r = 15 - y, wood = [.78, .57, .32], dark = [.48, .32, .16];
+    if (r >= 1 && r <= 8 && x >= 1 && x <= 14) { const border = r === 1 || r === 8 || x === 1 || x === 14;
+      const text = (r === 3 || r === 5) && x >= 4 && x <= 11 && x % 3 !== 0; return border || text ? dark : wood; }
+    if (r >= 9 && x >= 7 && x <= 8) return dark; return null; }, [.5, 0]);
+  const blobs = [[12, 9, 8], [24, 12, 10], [36, 9, 8]];
+  SPR.cloud = proc(48, 24, (x, y) => { if (y < 2) return null; for (const b of blobs) if (Math.hypot(x - b[0], y - b[1]) < b[2]) return y < 5 ? [.86, .92, 1] : [1, 1, 1]; return null; });
+  r = rng(16); SPR.hill = proc(64, 32, (x, y) => { const dx = (x - 31.5) / 32, dy = y / 32; return dx * dx + dy * dy < 1 ? (r() < .04 ? [.4, .65, .4] : [.5, .76, .48]) : null; }, [.5, 0]);
+  buildThemeArt();
+}
+
+// Cada tema: bloque de superficie (top), bloque interior (body) y fondo oscuro (dark)
+function buildThemeArt() {
+  SPR.themes = {};
+  SPR.themes.casa = { top: SPR.grass, body: SPR.dirt, dark: SPR.dark };
+  SPR.themes.jardin = SPR.themes.casa;
+  let r = rng(21);
+  const brick = (x, y, base, mortar) => { const row = Math.floor(y / 4), off = (row % 2) * 4;
+    if (y % 4 === 0 || (x + off) % 8 === 0) return mortar; const n = r() * .05; return [base[0] - n, base[1] - n, base[2] - n]; };
+  // Tejados: tejas rojas arriba, ladrillo abajo
+  SPR.themes.tejados = {
+    body: proc(16, 16, (x, y) => brick(x, y, [.6, .32, .26], [.78, .7, .62])),
+    top: proc(16, 16, (x, y) => { if (y >= 10) { const lx = x % 4; if (y === 15) return [.95, .45, .32]; if (y === 10 || (lx === 0 && y < 14)) return [.5, .14, .12];
+      return lx === 1 ? [.88, .36, .26] : [.76, .26, .2]; } return brick(x, y, [.6, .32, .26], [.78, .7, .62]); }),
+    dark: proc(16, 16, (x, y) => brick(x, y, [.28, .16, .14], [.2, .12, .1])),
+  };
+  // Alcantarillas: piedra gris verdosa con musgo
+  r = rng(22);
+  SPR.themes.alcantarilla = {
+    body: proc(16, 16, (x, y) => brick(x, y, [.36, .41, .39], [.2, .24, .22])),
+    top: proc(16, 16, (x, y) => { if (y === 15) return [.45, .7, .3]; if (y >= 13) return [.32, .55, .24];
+      if (y === 12 && (x * 5) % 7 < 3) return [.25, .45, .2]; return brick(x, y, [.36, .41, .39], [.2, .24, .22]); }),
+    dark: proc(16, 16, (x, y) => brick(x, y, [.11, .14, .13], [.07, .09, .08])),
+  };
+  // Fábrica: placas de acero con remaches y borde de peligro
+  r = rng(23);
+  const steel = (x, y) => { if (x === 0 || y === 0) return [.3, .32, .38]; if (x === 15 || y === 15) return [.62, .65, .72];
+    if ((x === 2 || x === 13) && (y === 2 || y === 13)) return [.8, .82, .88]; const n = r() * .04; return [.46 - n, .49 - n, .56 - n]; };
+  SPR.themes.fabrica = {
+    body: proc(16, 16, steel),
+    top: proc(16, 16, (x, y) => { if (y >= 12) return ((x + y) % 6 < 3) ? [.96, .78, .15] : [.15, .15, .18]; if (y === 11) return [.12, .12, .14]; return steel(x, y); }),
+    dark: proc(16, 16, (x, y) => { if (x === 0 || y === 0) return [.1, .11, .14]; const n = r() * .03; return [.17 - n, .19 - n, .24 - n]; }),
+  };
+  // Flores del jardín
+  SPR.flowers = [[1, .3, .35], [1, .85, .2], [.7, .45, 1]].map(c => pattern([".p.p.", "ppypp", ".ppp.", "..g..", ".gg..", "..g.."],
+    { p: c, y: [1, .95, .5], g: [.2, .6, .25] }, [.5, 0]));
+}
+
+// ------------------------- Nivel ------------------------------------
+const YMIN = -6, YMAX = 15, H = YMAX - YMIN + 1;
+let W = 188, THEME = "casa", LV = 0;
+let grid, fishes, enemies, spikes, checkpoints, signs, winds, goal, darkRects, clouds, hills, totalFish;
+let liquids, flowers, city, gears, boss, spawnAt;
+
+// Progreso guardado (niveles desbloqueados)
+let unlocked = 1;
+try { unlocked = Math.max(1, Math.min(5, parseInt(localStorage.getItem("gatos5_unlocked") || "1", 10) || 1)); } catch (e) { }
+function saveProgress() { try { localStorage.setItem("gatos5_unlocked", String(unlocked)); } catch (e) { } }
+
+function cellAt(x, y) { if (x < 0 || x >= W || y < YMIN || y > YMAX) return " "; return grid[x][y - YMIN]; }
+function setCell(x, y, c) { if (x < 0 || x >= W || y < YMIN || y > YMAX) return; grid[x][y - YMIN] = c; }
+function fill(x0, x1, y0, y1, c) { for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) setCell(x, y, c); }
+const isSolidChar = c => c === "#" || c === "|" || c === "B";
+function solidAt(x, y) { if (x < 0 || x >= W) return true; if (y > YMAX) return true; if (y < YMIN) return false; return isSolidChar(grid[x][y - YMIN]); }
+
+const LEVELS = [
+  { name: "La Casa", theme: "casa", w: 188, build: buildL1 },
+  { name: "El Jardín", theme: "jardin", w: 200, build: buildL2 },
+  { name: "Los Tejados", theme: "tejados", w: 210, build: buildL3 },
+  { name: "Las Alcantarillas", theme: "alcantarilla", w: 200, build: buildL4 },
+  { name: "La Fábrica de Atún", theme: "fabrica", w: 170, build: buildL5 },
+];
+
+function buildLevel() {
+  const L = LEVELS[LV];
+  W = L.w; THEME = L.theme;
+  grid = []; for (let x = 0; x < W; x++) grid.push(new Array(H).fill(" "));
+  fishes = []; enemies = []; spikes = []; checkpoints = []; signs = []; winds = []; darkRects = []; totalFish = 0;
+  liquids = []; flowers = []; city = []; gears = []; boss = null; spawnAt = [2.5, 1]; goal = null;
+  if (!SPR.birds) buildBirdArt();
+  L.build();
+
+  // Decoración según el tema
+  const r = rng(42 + LV); clouds = []; hills = [];
+  if (THEME === "casa" || THEME === "jardin" || THEME === "tejados")
+    for (let i = 0; i < 30; i++) clouds.push({ x: -15 + i * 4.2 + r() * 3, y: 5 + r() * 5, s: .8 + r() * .8 });
+  if (THEME === "casa" || THEME === "jardin")
+    for (let i = 0; i < 14; i++) hills.push({ x: -12 + i * 6 + r() * 3, y: -1.2, s: 1.5 + r() * 1.5 });
+  if (THEME === "jardin")
+    for (let x = 0; x < W; x++) for (let y = 0; y <= YMAX - 1; y++)
+      if (cellAt(x, y) === "#" && cellAt(x, y + 1) === " " && r() < .3) flowers.push({ x: x + .5, y: y + 1, k: Math.floor(r() * 3) });
+  if (THEME === "tejados")
+    for (let i = 0; i < 45; i++) city.push({ x: -20 + i * 3.4 + r() * 2, w: 2 + r() * 3, h: 3 + r() * 9, win: Math.floor(r() * 1000) });
+  if (THEME === "fabrica")
+    for (let i = 0; i < 16; i++) gears.push({ x: -10 + i * 7 + r() * 4, y: 2 + r() * 10, r: 1.2 + r() * 2.2, sp: (r() < .5 ? -1 : 1) * (.3 + r() * .5) });
+}
+
+// ---------- helpers de construcción ----------
+function pool(x0, x1, s, kind) {   // estanque peligroso hundido en el suelo (superficie s)
+  fill(x0, x1, s - 2, s - 1, " ");
+  const w = x1 - x0 + 1;
+  liquids.push({ x0, x1: x1 + 1, top: s - .35, bot: s - 2, kind, rect: box(x0 + w / 2, s - 1.2, w - .1, 1.6) });
+}
+// Enemigo volador (paloma o murciélago): va y viene entre x0 y x1 subiendo y bajando
+function bird(x, y, x0, x1, amp = .8) {
+  enemies.push({ fly: true, x, y, baseY: y, x0, x1, amp, w: .8, h: .55, vx: 0, vy: 0, dir: -1, dead: false, deadT: 0, ph: x * 1.7 });
+}
+function buildBirdArt() {
+  const rowsUp = ["...ww.......", "....www.....", ".ggggggg.e..", "gggggggggggo", ".ggggggggg..", "..k....k...."];
+  const rowsDn = [".ggggggg.e..", "gggggggggggo", ".gggwwwggg..", "....www.....", "...ww.......", "............"];
+  const pigeon = { g: [.62, .64, .72], w: [.82, .84, .9], e: [.9, .3, .2], o: [1, .7, .2], k: [.9, .5, .3] };
+  const bat = { g: [.35, .22, .45], w: [.22, .13, .3], e: [1, .25, .3], o: [.55, .4, .65], k: [.35, .22, .45] };
+  SPR.birds = {
+    pigeon: [pattern(rowsUp, pigeon, [.5, .5], [.15, .12, .2]), pattern(rowsDn, pigeon, [.5, .5], [.15, .12, .2])],
+    bat: [pattern(rowsUp, bat, [.5, .5], [.08, .04, .1]), pattern(rowsDn, bat, [.5, .5], [.08, .04, .1])],
+  };
+}
+
+function bld(x0, x1, top) { fill(x0, x1, YMIN, top - 1, "#"); }   // edificio para los tejados
+function goalAt(x, s, active = true) { goal = { x: x + .5, y: s, active, rect: box(x + .5, s + .8, 2, 1.6) }; }
+// Pasadizo bajo un muro (el truco de Punkero): bloques agrietados en x0..x0+2, muro en x0+6..x0+8
+function punkerGate(x0) {
+  fill(x0 + 6, x0 + 8, 1, YMAX, "#");
+  fill(x0, x0 + 12, -3, -2, " "); fill(x0, x0 + 2, -1, 0, "B"); fill(x0 + 9, x0 + 12, -1, 0, " ");
+  setCell(x0 + 10, -3, "#"); fill(x0 + 11, x0 + 11, -3, -2, "#"); fill(x0 + 12, x0 + 12, -3, -1, "#");
+  darkRects.push([x0, x0 + 12, -3, 0]);
+}
+
+// =====================================================================
+// NIVEL 1 — La Casa (tutorial)
+// =====================================================================
+function buildL1() {
+  fill(0, W - 1, YMIN, 0, "#");                       // suelo base
+  fill(20, 30, 1, 4, "#");                            // NARITO: saliente de 4
+  fill(38, 48, 2, YMAX, "#");                         // COWI: túnel de 1 bloque
+  punkerGate(56);                                     // PUNKERO: muro + pasadizo
+  fill(76, 88, 1, 9, "#"); fill(76, 76, 1, 9, "|");   // ROCKERA: acantilado con rascador
+  fill(89, 106, YMIN, 0, " ");                        // RAPERA: abismo de 18
+  fill(107, 133, 1, 4, "#");                          // ZONA COMBINADA
+  fill(116, 121, 6, YMAX, "#");
+  fill(127, 133, 5, 11, "#"); fill(127, 127, 5, 11, "|");
+  fill(134, 150, YMIN, 0, " ");
+  fill(151, W - 1, 1, 12, "#");
+  fill(159, W - 2, 1, 8, " ");
+  fill(164, 166, 9, 12, "B");
+  darkRects.push([159, W - 2, 1, 8]);
+
+  sign(3, 1, "¡Bienvenido! Muévete con A/D o las flechas y salta con Espacio. Cambia de gato con 1-5 o Q/E. Pisa a los ratones.");
+  fishRow(4, 7, 1.6); spikeRow(8, 9, 1); enemy(12, 1);
+  checkpoint(15, 1);
+  sign(16, 1, "NARITO (1): Doble salto. Pulsa Espacio otra vez en el aire para subir al saliente.");
+  fishRow(22, 29, 5.6); enemy(27, 5); bell(25.5, 9.5);
+  checkpoint(34, 1);
+  sign(35, 1, "COWI (2): Es el más pequeño. Solo él cabe por el túnel.");
+  fishRow(39, 47, 1.45);
+  enemy(53, 1);
+  checkpoint(51, 1);
+  sign(52, 1, "PUNKERO (3): Salta y pulsa S / Abajo en el aire: ¡golpe pesado! Rompe el suelo agrietado.");
+  fishRow(59, 64, -2.5);
+  checkpoint(71, 1);
+  sign(72, 1, "ROCKERA (4): Camina contra el rascador y subirá sola. Espacio para saltar desde el muro.");
+  fish(75.4, 3); fish(75.4, 5); fish(75.4, 7);
+  checkpoint(85, 10);
+  sign(86, 10, "RAPERA (5): Salta y mantén Espacio mientras caes para planear sobre el abismo.");
+  fishRow(79, 83, 10.6); enemy(81, 10);
+  fish(92.5, 11); fish(95.5, 10.5); fish(101.5, 8.5); fish(104.5, 7.5); bell(97.5, 9);
+  checkpoint(108, 5);
+  sign(109, 5, "¡Ahora combina a todos los gatos! Ojo: el viento solo eleva a Rapera cuando planea.");
+  fishRow(110, 114, 5.6); enemy(113, 5); fishRow(117, 120, 5.45);
+  fish(126.4, 7); fish(126.4, 9); fish(126.4, 11);
+  checkpoint(130, 12);
+  wind(141, 146, YMIN, YMAX); bell(143.5, 15);
+  checkpoint(152, 13);
+  sign(154, 13, "Algo suena hueco por aquí... El tazón de comida está abajo.");
+  fishRow(156, 162, 13.6); fishRow(168, 178, 1.6); enemy(171, 1); enemy(176, 1);
+  goalAt(183, 1);
+}
+
+// =====================================================================
+// NIVEL 2 — El Jardín
+// =====================================================================
+function buildL2() {
+  fill(0, W - 1, YMIN, 0, "#");
+  sign(3, 1, "Nivel 2: El Jardín. ¡Cuidado! Los estanques son peligrosos para los gatos.");
+  fishRow(5, 9, 1.6); enemy(11, 1);
+  pool(15, 18, 1, "agua"); fish(16.5, 3.6); fish(17.5, 3.6);
+  bird(17, 4.2, 13, 23, .7);
+  enemy(22, 1); enemy(26, 1);
+  // NARITO: doble escalón (4 + 4)
+  sign(29, 1, "NARITO: dos dobles saltos seguidos para subir el muro del jardín.");
+  fill(32, 42, 1, 4, "#"); fill(37, 42, 5, 8, "#");
+  fishRow(33, 36, 5.6); fishRow(38, 41, 9.6); bell(40.5, 13.5); enemy(40, 9);
+
+  checkpoint(45, 1); enemy(48, 1); enemy(51, 1); fishRow(44, 46, 1.6);
+  // ROCKERA: tronco del árbol
+  sign(53, 1, "ROCKERA: trepa el tronco del árbol.");
+  fill(56, 60, 1, 11, "#"); fill(56, 56, 1, 11, "|");
+  fish(55.4, 4); fish(55.4, 7); fish(55.4, 10);
+  // RAPERA: estanque grande
+  checkpoint(57, 12);
+  sign(59, 12, "RAPERA: planea desde el árbol sobre el estanque grande.");
+  pool(61, 82, 1, "agua");
+  fish(64.5, 11.5); fish(68.5, 10.5); fish(72.5, 9.5); fish(76.5, 8); fish(80.5, 6); bell(70.5, 6);
+  bird(74, 8.5, 70, 79, 1);
+
+  // PUNKERO: madriguera de topo
+  checkpoint(84, 1);
+  sign(85, 1, "PUNKERO: aquí hay una madriguera. ¡Rompe la piedra agrietada!");
+  punkerGate(87); fishRow(90, 95, -2.5);
+
+  // COWI: el seto
+  enemy(104, 1); enemy(108, 1); enemy(113, 1); spikeRow(110, 111, 1); fishRow(104, 106, 1.6);
+  sign(117, 1, "COWI: solo él cabe por el hueco del seto.");
+  fill(120, 132, 2, YMAX, "#"); fishRow(121, 131, 1.45);
+
+  // FINAL
+  checkpoint(134, 1);
+  sign(135, 1, "¡Último tramo! Combina a tus gatos.");
+  spikeRow(137, 140, 1);
+  fill(145, 150, 1, 9, "#"); fill(145, 145, 1, 9, "|");
+  fish(144.4, 4); fish(144.4, 7);
+  checkpoint(147, 10);
+  fill(151, 170, YMIN, 0, " ");
+  fish(154.5, 11); fish(158.5, 10); fish(166.5, 7); bell(162.5, 7);
+  bird(160, 8.5, 155, 167, 1.1);
+  checkpoint(172, 1); enemy(178, 1); enemy(182, 1); enemy(186, 1); spikeRow(189, 190, 1); fishRow(174, 177, 1.6); fishRow(186, 190, 1.6);
+  goalAt(194, 1);
+}
+
+// =====================================================================
+// NIVEL 3 — Los Tejados
+// =====================================================================
+function buildL3() {
+  spawnAt = [2.5, 3];
+  bld(0, 18, 3);
+  sign(3, 3, "Nivel 3: Los Tejados. ¡No caigas entre los edificios!");
+  fishRow(5, 10, 3.6); enemy(13, 3);
+  bld(22, 34, 3); enemy(30, 3); spikeRow(26, 27, 3); fishRow(19, 21, 5);
+  bird(20, 6, 16, 25, .8);
+  // NARITO
+  sign(31, 3, "NARITO: el siguiente tejado está alto. ¡Doble salto!");
+  bld(35, 45, 7); fishRow(37, 44, 7.6); bell(41.5, 11.6);
+  // RAPERA
+  bld(49, 58, 5); checkpoint(50, 5); enemy(57, 5); spikeRow(53, 54, 5); bell(55.5, 9.5);
+  bird(47, 8.5, 45, 50, .6);
+  sign(52, 5, "RAPERA: planea y usa la corriente de aire para llegar al siguiente tejado.");
+  wind(65, 69, YMIN, YMAX);
+  fish(61.5, 7); fish(67.5, 10); fish(67.5, 13); fish(73.5, 9);
+  bld(77, 88, 5); checkpoint(78, 5); enemy(82, 5);
+  // ROCKERA: chimenea
+  sign(85, 5, "ROCKERA: trepa la chimenea.");
+  bld(89, 95, 14); fill(89, 89, 5, 13, "|");
+  fish(88.4, 7); fish(88.4, 10); fish(88.4, 13);
+  // RAPERA + viento
+  checkpoint(91, 14);
+  sign(93, 14, "RAPERA: las corrientes de aire te elevan. ¡Úsalas para cruzar!");
+  wind(107, 111, YMIN, YMAX); wind(117, 121, YMIN, YMAX); bell(119.5, 15);
+  fish(100.5, 14); fish(109.5, 14); fish(114.5, 13.5); fish(124.5, 14);
+  // COWI ático + PUNKERO claraboya
+  bld(126, 175, 13);
+  fill(132, 140, 14, YMAX, "#");
+  fill(142, 175, 3, 8, " ");
+  fill(145, 147, 9, 12, "B");
+  fill(151, 153, 13, YMAX, "#");
+  darkRects.push([142, 175, 3, 8]);
+  checkpoint(127, 13);
+  sign(128, 13, "COWI: entra por la rendija del ático.");
+  fishRow(133, 139, 13.45);
+  sign(141, 13, "PUNKERO: rompe la claraboya agrietada para entrar al edificio.");
+  checkpoint(143, 3);
+  fishRow(150, 172, 3.6); enemy(157, 3); enemy(163, 3); enemy(169, 3);
+  bld(179, 209, 3); checkpoint(180, 3); enemy(188, 3); enemy(193, 3); enemy(198, 3); fishRow(182, 188, 3.6);
+  spikeRow(184, 185, 3); bird(194, 6, 186, 202, .9);
+  goalAt(204, 3);
+}
+
+// =====================================================================
+// NIVEL 4 — Las Alcantarillas
+// =====================================================================
+function buildL4() {
+  fill(0, W - 1, YMIN, 0, "#");
+  fill(0, W - 1, 12, YMAX, "#");                       // techo de la alcantarilla
+  sign(3, 1, "Nivel 4: Las Alcantarillas. ¡No toques el agua tóxica!");
+  fishRow(5, 9, 1.6);
+  pool(13, 16, 1, "toxico");
+  // COWI: tubería
+  checkpoint(18, 1);
+  sign(19, 1, "COWI: métete por la tubería.");
+  fill(22, 34, 2, 11, "#"); fishRow(23, 29, 1.45); bell(30.5, 1.5); fishRow(31, 33, 1.45);
+  enemy(38, 1); enemy(42, 1); fishRow(37, 39, 1.6);
+  bird(40, 4, 36, 44, .7);
+  // PUNKERO: rejilla
+  sign(43, 1, "PUNKERO: rompe la rejilla agrietada.");
+  punkerGate(46); fishRow(49, 54, -2.5);
+  checkpoint(60, 1); pool(63, 66, 1, "toxico"); fish(64.5, 3.6); fish(65.5, 3.6);
+  bird(66, 4.5, 61, 70, .8);
+  // ROCKERA: pared con escalera
+  sign(68, 1, "ROCKERA: sube por la pared.");
+  fill(72, 80, 1, 6, "#"); fill(72, 72, 1, 6, "|");
+  fish(71.4, 3); fish(71.4, 5);
+  // RAPERA: río tóxico
+  checkpoint(74, 7);
+  sign(76, 7, "RAPERA: planea sobre el río tóxico.");
+  pool(81, 100, 1, "toxico");
+  fish(84.5, 9); fish(88.5, 8); fish(94.5, 6.5); fish(98.5, 5); bell(90.5, 5);
+  // NARITO + COWI
+  checkpoint(102, 1); enemy(106, 1); enemy(110, 1); enemy(113, 1); fishRow(103, 106, 1.6);
+  pool(108, 109, 1, "toxico"); bird(111, 4.5, 104, 116, .9);
+  sign(115, 1, "NARITO sube el escalón, y luego COWI entra por el tubo de arriba.");
+  fill(118, 140, 1, 4, "#"); fill(129, 140, 6, 11, "#");
+  checkpoint(120, 5); fishRow(130, 139, 5.45); bell(124.5, 9.5);
+  // PUNKERO: hacia el túnel de abajo
+  checkpoint(143, 1); enemy(146, 1); spikeRow(148, 149, 1);
+  sign(150, 1, "PUNKERO: el tazón está en el túnel de abajo. ¡Rompe el suelo!");
+  fill(158, 160, 1, 11, "#");
+  fill(153, 198, -4, -2, " "); fill(153, 155, -1, 0, "B");
+  checkpoint(163, -4); enemy(170, -4); enemy(177, -4); enemy(184, -4); fishRow(165, 188, -3.4);
+  goalAt(193, -4);
+}
+
+// =====================================================================
+// NIVEL 5 — La Fábrica de Atún (con jefe)
+// =====================================================================
+function buildL5() {
+  fill(0, W - 1, YMIN, 0, "#");
+  sign(3, 1, "Nivel 5: La Fábrica de Atún. ¡Al fondo espera la Aspiradora gigante!");
+  fishRow(5, 9, 1.6);
+  // NARITO: plataformas sobre pinchos
+  checkpoint(11, 1);
+  sign(12, 1, "NARITO: salta por las plataformas sobre los pinchos.");
+  spikeRow(14, 24, 1);
+  fill(15, 17, 3, 3, "#"); fill(20, 22, 5, 5, "#");
+  fishRow(15, 17, 4.6); fishRow(20, 22, 6.6); bell(21.5, 10);
+  // COWI: ducto
+  fill(25, 44, 1, 3, "#"); fill(33, 44, 5, YMAX, "#");
+  checkpoint(27, 4);
+  sign(28, 4, "COWI: entra por el ducto de ventilación.");
+  fishRow(34, 43, 4.45);
+  checkpoint(47, 1); enemy(50, 1); enemy(53, 1); bird(51, 4, 46, 56, .8);
+  // ROCKERA: tanque de atún
+  sign(55, 1, "ROCKERA: trepa el tanque de atún.");
+  fill(58, 64, 1, 10, "#"); fill(58, 58, 1, 10, "|");
+  fish(57.4, 4); fish(57.4, 7);
+  // RAPERA: gran abismo
+  checkpoint(61, 11);
+  sign(62, 11, "RAPERA: planea sobre el abismo de la fábrica.");
+  fill(65, 86, YMIN, 0, " ");
+  fish(68.5, 12.5); fish(72.5, 11.5); fish(80.5, 8); fish(84.5, 6.5); bell(75.5, 7);
+  bird(79, 9, 74, 85, 1.2);
+  // PUNKERO: compuerta hacia el jefe
+  checkpoint(88, 1); enemy(90, 1);
+  sign(89, 1, "PUNKERO: rompe la compuerta del piso para llegar a la sala del jefe.");
+  punkerGate(92); fishRow(95, 100, -2.5);
+  // ARENA DEL JEFE
+  checkpoint(106, 1);
+  sign(107, 1, "¡JEFE! Sube a una plataforma y cae sobre la Aspiradora con el golpe de Punkero. ¡Cuidado con su succión!");
+  fill(110, 111, 1, 2, "#"); fill(112, 113, 1, 4, "#"); fill(114, 119, 4, 4, "#");
+  fill(154, 159, 4, 4, "#"); fill(160, 161, 1, 4, "#"); fill(162, 163, 1, 2, "#");
+  bell(116.5, 9.5);
+  boss = { x: 140, y: 1 + 1.25, w: 3, h: 2.5, dir: -1, hp: 3, inv: 0, suckT: 0, cool: 3, minX: 117.5, maxX: 156.5,
+           dead: false, deathT: 0, hintT: 0, t: 0 };
+  goalAt(137, 1, false);
+}
+function box(cx, cy, w, h) { return { cx, cy, w, h }; }
+function fish(x, y) { fishes.push({ x, y, bell: false, taken: false, rect: box(x, y, .7, .7) }); totalFish++; }
+function fishRow(x0, x1, y) { for (let x = x0; x <= x1; x++) fish(x + .5, y); }
+function bell(x, y) { fishes.push({ x, y, bell: true, taken: false, rect: box(x, y, .8, .8) }); }
+function spikeRow(x0, x1, s) { const w = x1 - x0 + 1; spikes.push({ x0, x1, s, rect: box(x0 + w / 2, s + .25, w - .2, .45) }); }
+function enemy(x, s) { enemies.push({ x: x + .5, y: s + .3, w: .85, h: .55, vx: 0, vy: 0, dir: -1, dead: false, deadT: 0 }); }
+function checkpoint(x, s) { checkpoints.push({ x: x + .3, s, feet: [x + .5, s], active: false, rect: box(x + .5, s + 1.5, 1, 3) }); }
+function sign(x, s, text) { signs.push({ x: x + .5, s, text, rect: box(x + .5, s + 1.5, 5, 3) }); }
+function wind(x0, x1, y0, y1) { const w = x1 - x0 + 1, h = y1 - y0 + 2;
+  const streaks = []; for (let i = 0; i < Math.round(w * h / 4); i++) streaks.push({ x: rand(-w / 2, w / 2), y: rand(-h / 2, h / 2) });
+  winds.push({ rect: box(x0 + w / 2, y0 + h / 2, w, h), streaks }); }
+const overlap = (a, b) => Math.abs(a.cx - b.cx) * 2 < a.w + b.w && Math.abs(a.cy - b.cy) * 2 < a.h + b.h;
+
+// ------------------------- Física de cajas contra la cuadrícula ------
+const EPS = 1e-4, EPS2 = 1e-3;
+function boxHitsSolid(cx, cy, w, h) {
+  const x0 = Math.floor(cx - w / 2 + EPS), x1 = Math.floor(cx + w / 2 - EPS);
+  const y0 = Math.floor(cy - h / 2 + EPS), y1 = Math.floor(cy + h / 2 - EPS);
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) if (solidAt(x, y)) return true;
+  return false;
+}
+function moveEntity(e, dt, onFloorHit) {
+  e.x += e.vx * dt;
+  if (boxHitsSolid(e.x, e.y, e.w, e.h)) {
+    if (e.vx > 0) e.x = Math.floor(e.x + e.w / 2 - EPS) - e.w / 2 - EPS2;
+    else if (e.vx < 0) e.x = Math.floor(e.x - e.w / 2 + EPS) + 1 + e.w / 2 + EPS2;
+    e.vx = 0;
+  }
+  e.y += e.vy * dt;
+  if (boxHitsSolid(e.x, e.y, e.w, e.h)) {
+    if (e.vy < 0) {
+      if (onFloorHit && onFloorHit(e) && !boxHitsSolid(e.x, e.y, e.w, e.h)) return;
+      e.y = Math.floor(e.y - e.h / 2 + EPS) + 1 + e.h / 2 + EPS2;
+    } else if (e.vy > 0) e.y = Math.floor(e.y + e.h / 2 - EPS) - e.h / 2 - EPS2;
+    e.vy = 0;
+  }
+}
+function onGround(e) {
+  const y = Math.floor(e.y - e.h / 2 - .02);
+  const x0 = Math.floor(e.x - e.w * .45), x1 = Math.floor(e.x + e.w * .45);
+  for (let x = x0; x <= x1; x++) if (solidAt(x, y)) return true;
+  return false;
+}
+
+// ------------------------- Entrada ----------------------------------
+const held = new Set(), pressed = new Set(), released = new Set();
+const GAME_KEYS = ["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+addEventListener("keydown", e => {
+  if (GAME_KEYS.includes(e.code)) e.preventDefault();
+  if (!held.has(e.code)) pressed.add(e.code); held.add(e.code);
+  if (!started) { const m = /^(Digit|Numpad)([1-5])$/.exec(e.code); if (m && +m[2] <= unlocked) selLevel = +m[2] - 1; }
+  if (!finished && !gameOver) startGame();
+});
+addEventListener("keyup", e => { held.delete(e.code); released.add(e.code); });
+addEventListener("blur", () => held.clear());
+addEventListener("pointerdown", () => { if (!finished) startGame(); });
+
+// ------------------------- Controles táctiles -----------------------
+let touchMode = matchMedia("(pointer: coarse)").matches;
+function setTouch(on) { touchMode = on; document.body.classList.toggle("touch", on); }
+setTouch(touchMode);
+addEventListener("touchstart", () => { if (!touchMode) setTouch(true); }, { passive: true });
+addEventListener("contextmenu", e => e.preventDefault());
+function vPress(k) { if (!held.has(k)) pressed.add(k); held.add(k); }
+function vRelease(k) { if (held.has(k)) { held.delete(k); released.add(k); } }
+
+// Botones que equivalen a una tecla (salto, golpe)
+document.querySelectorAll(".tbtn[data-key]").forEach(b => {
+  const k = b.dataset.key;
+  const down = e => { e.preventDefault(); e.stopPropagation(); try { b.setPointerCapture(e.pointerId); } catch (_) { } startGame(); vPress(k); b.classList.add("on"); };
+  const up = e => { e.preventDefault(); vRelease(k); b.classList.remove("on"); };
+  b.addEventListener("pointerdown", down);
+  ["pointerup", "pointercancel", "lostpointercapture"].forEach(ev => b.addEventListener(ev, up));
+});
+
+// Cruceta: se puede deslizar el dedo entre izquierda y derecha
+const dpad = document.getElementById("dpad"), halves = dpad.querySelectorAll(".half");
+const dpadTouches = new Map();
+function dpadUpdate() {
+  let dir = 0; for (const d of dpadTouches.values()) dir = d;
+  dir < 0 ? vPress("ArrowLeft") : vRelease("ArrowLeft");
+  dir > 0 ? vPress("ArrowRight") : vRelease("ArrowRight");
+  halves[0].classList.toggle("on", dir < 0); halves[1].classList.toggle("on", dir > 0);
+}
+function dpadDir(e) { const r = dpad.getBoundingClientRect(); return e.clientX < r.left + r.width / 2 ? -1 : 1; }
+dpad.addEventListener("pointerdown", e => { e.preventDefault(); e.stopPropagation(); try { dpad.setPointerCapture(e.pointerId); } catch (_) { } startGame(); dpadTouches.set(e.pointerId, dpadDir(e)); dpadUpdate(); });
+dpad.addEventListener("pointermove", e => { if (dpadTouches.has(e.pointerId)) { dpadTouches.set(e.pointerId, dpadDir(e)); dpadUpdate(); } });
+["pointerup", "pointercancel", "lostpointercapture"].forEach(ev => dpad.addEventListener(ev, e => { dpadTouches.delete(e.pointerId); dpadUpdate(); }));
+
+// Botones pequeños de arriba
+function tapBtn(id, fn) { document.getElementById(id).addEventListener("pointerdown", e => { e.preventDefault(); e.stopPropagation(); if (!finished) startGame(); fn(); }); }
+tapBtn("bReset", () => { resetGame(); flash("¡A intentarlo de nuevo!"); });
+tapBtn("bMute", () => { muted = !muted; document.getElementById("bMute").textContent = muted ? "✕" : "♪"; flash(muted ? "Sonido apagado" : "Sonido encendido"); });
+const fsOK = document.fullscreenEnabled || document.webkitFullscreenEnabled;
+if (!fsOK) document.getElementById("bFull").style.display = "none";
+tapBtn("bFull", () => {
+  const el = document.documentElement;
+  if (document.fullscreenElement || document.webkitFullscreenElement) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+  const req = el.requestFullscreen || el.webkitRequestFullscreen;
+  if (req) Promise.resolve(req.call(el)).then(() => { if (screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(() => { }); }).catch(() => { });
+});
+
+// Tocar un gato en la barra para cambiar
+let catRects = [];
+document.getElementById("c").addEventListener("pointerdown", e => {
+  const u = CH / 720, vx = e.clientX * devicePixelRatio / u, vy = e.clientY * devicePixelRatio / u;
+  if (finished) { e.stopPropagation(); if (credits) backToTitle(); else { credits = true; creditsT = 0; } return; }
+  if (gameOver) {
+    e.stopPropagation();
+    gameOverRects.forEach((r, i) => { if (vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3]) { if (i === 0) continueLevel(); else backToTitle(); } });
+    return;
+  }
+  if (!started) {
+    levelRects.forEach((r, i) => { if (i < unlocked && vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3]) selLevel = i; });
+    startGame(); return;
+  }
+  if (won) { nextLevel(); return; }
+  catRects.forEach((r, i) => { if (vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3]) trySwitch(i); });
+});
+
+const H_ = c => held.has(c), P_ = c => pressed.has(c), R_ = c => released.has(c);
+const inp = {
+  x: () => ((H_("KeyD") || H_("ArrowRight")) ? 1 : 0) - ((H_("KeyA") || H_("ArrowLeft")) ? 1 : 0),
+  jumpDown: () => P_("Space") || P_("KeyZ"), jumpHeld: () => H_("Space") || H_("KeyZ"), jumpUp: () => R_("Space") || R_("KeyZ"),
+  up: () => H_("KeyW") || H_("ArrowUp"), down: () => H_("KeyS") || H_("ArrowDown"), downPressed: () => P_("KeyS") || P_("ArrowDown"),
+  cat: () => { for (let i = 1; i <= 5; i++) if (P_("Digit" + i) || P_("Numpad" + i)) return i - 1; return -1; },
+};
+
+// ------------------------- Sonido (bips sencillos) -------------------
+let actx = null, muted = false;
+function beep(f, d = .08, type = "square", vol = .04, slide = 0) {
+  if (!actx || muted) return;
+  const t = actx.currentTime, o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t); if (slide) o.frequency.linearRampToValueAtTime(Math.max(30, f + slide), t + d);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(.0001, t + d);
+  o.connect(g).connect(actx.destination); o.start(t); o.stop(t + d + .02);
+}
+
+// ------------------------- Estado del juego --------------------------
+let started = false, won = false, time = 0, fishCount = 0, bells = 0, deaths = 0;
+let respawn = [2.5, 1], hint = "", hintT = 0, msg = "", msgT = 0;
+let particles = [], cam = { x: 0, y: 0 }, shakeT = 0, shakeA = 0;
+let P;   // jugador
+let lives = 3, score = 0, levelStartScore = 0, fishTotal = 0, gameOver = false, winBonus = 0;
+let popups = [], uiFx = { fish: 0, bell: 0, life: 0, score: 0 }, abilityToast = { cat: 0, t: 0 };
+let record = 0;
+try { record = parseInt(localStorage.getItem("gatos5_record") || "0", 10) || 0; } catch (e) { }
+function saveRecord() { if (score > record) { record = score; try { localStorage.setItem("gatos5_record", String(record)); } catch (e) { } } }
+function addScore(n, x, y, big) {
+  score += n; uiFx.score = .35;
+  if (x !== undefined) popups.push({ x, y, text: "+" + n, t: 1, big: !!big });
+}
+
+let selLevel = unlocked - 1, finished = false, levelRects = [];
+function startGame() {
+  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { } }
+  if (!started) {
+    if (LV !== selLevel) LV = selLevel;
+    lives = 3; score = 0; levelStartScore = 0; fishTotal = 0; gameOver = false;
+    resetGame();
+    started = true; pressed.clear();
+    flash("Nivel " + (LV + 1) + ": " + LEVELS[LV].name);
+  }
+}
+function nextLevel() {
+  levelStartScore = score; saveRecord();
+  if (LV < LEVELS.length - 1) { LV++; selLevel = LV; resetGame(); flash("Nivel " + (LV + 1) + ": " + LEVELS[LV].name); }
+  else { finished = true; }
+}
+function continueLevel() { lives = 3; score = levelStartScore; gameOver = false; resetGame(); flash("¡Otra vez! Nivel " + (LV + 1)); }
+function backToTitle() { saveRecord(); credits = false; finished = false; gameOver = false; started = false; selLevel = unlocked - 1; LV = selLevel; resetGame(); }
+function flash(t) { msg = t; msgT = 2; }
+function shake(t, a) { shakeT = Math.max(shakeT, t); shakeA = Math.max(shakeA, a); }
+function poof(x, y, c, n) { for (let i = 0; i < n; i++) { const a = Math.random() * 6.28, s = Math.random() * 3;
+  particles.push({ x: x + rand(-.2, .2), y: y + rand(-.2, .2), vx: Math.cos(a) * s, vy: Math.sin(a) * s, g: 0, life: .4, max: .4, s0: .15, s1: .6, c, sq: false }); } }
+function debris(x, y) { for (let i = 0; i < 5; i++) particles.push({ x: x + rand(-.3, .3), y: y + rand(-.3, .3), vx: rand(-4, 4), vy: rand(3, 8), g: 25, life: .7, max: .7, s0: 1.6, s1: 1.2, c: [.6, .58, .66], sq: true }); }
+
+function resetGame() {
+  buildLevel();
+  won = false; time = 0; fishCount = 0; bells = 0; deaths = 0; respawn = spawnAt.slice(); particles = []; popups = []; winBonus = 0;
+  const d = CATS[0];
+  P = { cat: 0, x: respawn[0], y: respawn[1] + d.h / 2 + .02, w: d.w, h: d.h, vx: 0, vy: 0,
+        grounded: false, coyote: 0, airJumps: 0, pounding: false, poundHang: 0, climbing: false, wallLock: 0,
+        gliding: false, inWind: false, invuln: 0, lastDeath: -10, prevVy: 0, facing: 1, sqx: 1, sqy: 1,
+        jumpBuffer: 0, jumpReleased: false, downPressed: false, gs: 1, t: 0, dying: 0, spin: 0 };
+  snapCam();
+}
+
+// ------------------------- Jugador ----------------------------------
+function trySwitch(i) {
+  if (i === P.cat || i < 0 || i > 4) return;
+  const nd = CATS[i], feet = P.y - P.h / 2, ny = feet + nd.h / 2 + .02;
+  if (boxHitsSolid(P.x, ny, nd.w - .08, nd.h - .08)) { flash("¡" + nd.name + " no cabe aquí!"); beep(140, .12, "square", .04, -40); return; }
+  P.cat = i; P.w = nd.w; P.h = nd.h; P.y = ny; abilityToast = { cat: i, t: 2.2 };
+  P.pounding = false; P.climbing = false; P.gliding = false; P.gs = 1;
+  P.sqx = 1.3; P.sqy = .7; poof(P.x, P.y, nd.body, 7); beep(520 + i * 80, .07, "triangle", .05);
+}
+
+function climbWallDir() {
+  for (const dir of [P.facing, -P.facing]) {
+    const x = Math.floor(dir > 0 ? P.x + P.w / 2 + .06 : P.x - P.w / 2 - .06);
+    const y0 = Math.floor(P.y - P.h * .3), y1 = Math.floor(P.y + P.h * .3);
+    for (let y = y0; y <= y1; y++) if (cellAt(x, y) === "|") return dir;
+  }
+  return 0;
+}
+
+function breakUnder(e) {
+  if (!P.pounding || P.poundHang > 0) return false;
+  const b = e.y - e.h / 2;
+  const x0 = Math.floor(e.x - e.w / 2 + EPS), x1 = Math.floor(e.x + e.w / 2 - EPS), yb = Math.floor(b + EPS);
+  let hitB = false; for (let x = x0; x <= x1; x++) if (cellAt(x, yb) === "B") hitB = true;
+  if (!hitB) return false;
+  let broke = false;
+  for (let x = Math.floor(e.x - 1.3); x <= Math.floor(e.x + 1.3); x++)
+    for (let y = Math.floor(b - 1.05); y <= Math.floor(b + .1); y++)
+      if (cellAt(x, y) === "B") { setCell(x, y, " "); debris(x + .5, y + .5); broke = true; addScore(50, x + .5, y + .5); }
+  if (broke) { e.vy = POUND; shake(.15, .15); beep(90, .15, "sawtooth", .06, -40); }
+  return broke;
+}
+
+function die() {
+  if (P.dying > 0 || won || P.t - P.lastDeath < .4) return;
+  P.lastDeath = P.t; deaths++; lives--; uiFx.life = .5;
+  poof(P.x, P.y, [1, 1, 1], 10); beep(300, .5, "square", .05, -250); shake(.25, .2);
+  P.dying = 1.1; P.vx = 0; P.vy = 11; P.pounding = false; P.climbing = false; P.gliding = false;
+}
+function finishDeath() {
+  P.dying = 0;
+  if (lives <= 0) { gameOver = true; saveRecord(); beep(200, .6, "triangle", .06, -150); return; }
+  let d = CATS[P.cat];
+  if (boxHitsSolid(respawn[0], respawn[1] + d.h / 2 + .02, d.w - .08, d.h - .08)) { P.cat = 0; d = CATS[0]; P.w = d.w; P.h = d.h; }
+  P.x = respawn[0]; P.y = respawn[1] + d.h / 2 + .02; P.vx = 0; P.vy = 0;
+  P.pounding = false; P.climbing = false; P.gs = 1; P.invuln = 1.2;
+  flash(lives === 1 ? "¡Cuidado! Te queda 1 vida" : "¡Miau! Te quedan " + lives + " vidas"); snapCam();
+}
+
+function stepPlayer(dt) {
+  P.t += dt;
+  if (P.dying > 0) {            // animación de muerte: salta y cae girando
+    P.dying -= dt; P.vy -= G * dt; P.y += P.vy * dt; P.spin += dt * 9;
+    if (P.dying <= 0) finishDeath();
+    return;
+  }
+  const d = CATS[P.cat];
+  // entrada
+  const mx = inp.x(), jumpHeld = inp.jumpHeld(), up = inp.up(), down = inp.down();
+  if (inp.jumpDown()) P.jumpBuffer = .12;
+  if (inp.jumpUp()) P.jumpReleased = true;
+  if (inp.downPressed()) P.downPressed = true;
+  const k = inp.cat(); if (k >= 0) trySwitch(k);
+  if (P_("KeyE")) trySwitch((P.cat + 1) % 5);
+  if (P_("KeyQ")) trySwitch((P.cat + 4) % 5);
+  if (mx !== 0 && !P.climbing) P.facing = mx > 0 ? 1 : -1;
+  const D = CATS[P.cat];
+
+  // suelo
+  const wasG = P.grounded;
+  P.grounded = onGround(P) && P.vy <= .1;
+  if (P.grounded) {
+    P.coyote = .1; P.airJumps = 0;
+    if (!wasG) {
+      if (P.pounding) { P.pounding = false; P.sqx = 1.4; P.sqy = .65; shake(.25, .2); poof(P.x, P.y - P.h / 2, [.8, .75, .7], 8); beep(70, .18, "sawtooth", .06, -30); }
+      else if (P.prevVy < -6) { P.sqx = 1.25; P.sqy = .8; }
+    }
+  } else P.coyote -= dt;
+  if (P.wallLock > 0) P.wallLock -= dt;
+
+  let vx = P.vx, vy = P.vy;
+  const accel = P.grounded ? 70 : 45;
+  if (!P.pounding) vx = moveTowards(vx, mx * D.speed, accel * dt);
+
+  // ROCKERA: trepar
+  const wallDir = (D.type === "trepa" && P.wallLock <= 0 && !P.pounding) ? climbWallDir() : 0;
+  const wasClimbing = P.climbing;
+  P.climbing = wallDir !== 0 && mx * wallDir > -.1 && (mx * wallDir > .1 || up || (wasClimbing && !P.grounded));
+  const climbUp = up || mx * wallDir > .1;
+  if (P.climbing) { P.gs = 0; P.airJumps = 0; vy = down ? -CLIMB * 1.2 : (climbUp ? CLIMB : 0); P.facing = wallDir; }
+  else { P.gs = 1; if (wasClimbing && (up || mx * P.facing > .1) && D.type === "trepa" && P.wallLock <= 0) vy = Math.max(vy, 9); }
+
+  // saltos
+  const jumped = () => { P.jumpBuffer = 0; P.jumpReleased = false; P.sqx = .8; P.sqy = 1.2; };
+  if (P.jumpBuffer > 0) {
+    if (P.climbing) { vx = -wallDir * 7; vy = D.jump * .9; P.climbing = false; P.gs = 1; P.wallLock = .25; P.facing = -wallDir; jumped(); beep(600, .08, "square", .04, 200); }
+    else if (P.coyote > 0) { vy = D.jump; P.coyote = 0; jumped(); beep(420, .09, "square", .04, 250); }
+    else if (D.type === "doble" && P.airJumps < 1) { vy = D.jump * .92; P.airJumps++; jumped(); poof(P.x, P.y - P.h / 2, [1, 1, 1], 5); beep(620, .09, "square", .04, 300); }
+  }
+  P.jumpBuffer -= dt;
+  if (P.jumpReleased) { if (vy > 0 && !P.climbing) vy *= .5; P.jumpReleased = false; }
+
+  // PUNKERO: golpe pesado
+  if (P.downPressed) {
+    P.downPressed = false;
+    if (D.type === "golpe" && !P.grounded && !P.pounding && !P.climbing) { P.pounding = true; P.poundHang = .09; P.sqx = .8; P.sqy = 1.2; beep(200, .08, "triangle", .05, 200); }
+  }
+  if (P.pounding) {
+    if (P.poundHang > 0) { P.poundHang -= dt; vx = 0; vy = 0; P.gs = 0; }
+    else { P.gs = 1; vx = 0; vy = POUND; }
+  }
+
+  // RAPERA: planear + viento
+  const windNow = P.inWind; P.inWind = false; P.gliding = false;
+  if (D.type === "planea" && !P.grounded && jumpHeld && !P.climbing) {
+    if (windNow) { vy = moveTowards(vy, WIND_LIFT, 45 * dt); P.gliding = true; }
+    else if (vy < 0) { vy = Math.max(vy, GLIDE_FALL); P.gliding = true; }
+  }
+  if (!P.pounding) vy = Math.max(vy, MAX_FALL);
+  P.prevVy = vy;
+
+  // integrar (gravedad + colisiones)
+  vy -= G * P.gs * dt;
+  if (P.pounding && P.poundHang <= 0) vy = POUND;
+  vx += bossPull();
+  P.vx = vx; P.vy = vy;
+  moveEntity(P, dt, breakUnder);
+
+  // disparadores
+  const pr = box(P.x, P.y, P.w, P.h);
+  for (const f of fishes) if (!f.taken && overlap(pr, f.rect)) {
+    f.taken = true;
+    if (f.bell) { bells++; uiFx.bell = .4; addScore(1000, f.x, f.y, true); flash("¡Cascabel secreto! " + bells + "/3"); poof(f.x, f.y, [1, .85, .2], 10); beep(880, .25, "triangle", .06, 400); }
+    else {
+      fishCount++; fishTotal++; uiFx.fish = .3; addScore(10); poof(f.x, f.y, [.5, .8, 1], 4); beep(990, .06, "square", .03, 200);
+      if (fishTotal % 50 === 0) { lives++; flash("¡1UP! Vida extra"); popups.push({ x: P.x, y: P.y + 1, text: "1UP", t: 1.3, big: true });
+        [660, 880, 1320].forEach((f2, i) => setTimeout(() => beep(f2, .12, "square", .05), i * 90)); }
+    }
+  }
+  for (const w of winds) if (overlap(pr, w.rect)) P.inWind = true;
+  for (const s of spikes) if (overlap(pr, s.rect)) die();
+  for (const c of checkpoints) if (!c.active && overlap(pr, c.rect)) {
+    c.active = true; respawn = c.feet.slice(); flash("¡Checkpoint!"); poof(c.x + .2, c.s + 1.2, [.3, .85, .4], 6); beep(700, .15, "triangle", .05, 300);
+  }
+  for (const s of signs) if (overlap(pr, s.rect)) { hint = s.text; hintT = .15; }
+  for (const l of liquids) if (overlap(pr, l.rect)) die();
+  if (goal.active && overlap(pr, goal.rect) && !won) {
+    won = true; winBonus = Math.max(0, 300 - Math.floor(time)) * 10; score += winBonus; saveRecord(); poof(P.x, P.y, [1, .85, .3], 20); [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => beep(f, .18, "triangle", .06), i * 120));
+    if (LV + 2 > unlocked) { unlocked = Math.min(LEVELS.length, LV + 2); saveProgress(); }
+  }
+  bossContact(pr, jumpHeld);
+  for (const e of enemies) {
+    if (e.dead || !overlap(pr, box(e.x, e.y, .75, .5))) continue;
+    const fromAbove = (P.y - P.h / 2) > e.y - .15 && P.prevVy < 1;
+    if (P.pounding || fromAbove) {
+      e.dead = true; e.deadT = .4; poof(e.x, e.y, [.8, .8, .85], 6); shake(.08, .1); beep(250, .1, "square", .05, -150);
+      addScore(e.fly ? 200 : 100, e.x, e.y + .6);
+      if (!P.pounding) { P.vy = jumpHeld ? 13 : 9; P.prevVy = P.vy; P.airJumps = 0; }
+    } else if (P.invuln <= 0) die();
+  }
+  if (P.y < YMIN - 4) die();
+  if (P.invuln > 0) P.invuln -= dt;
+}
+
+function stepEnemies(dt) {
+  for (const e of enemies) {
+    if (e.dead) { e.deadT -= dt; if (e.fly) e.y -= 7 * dt; continue; }
+    if (e.fly) {
+      e.ph += dt; e.x += e.dir * (1.8 + LV * .2) * dt;
+      if (e.x < e.x0) { e.x = e.x0; e.dir = 1; } if (e.x > e.x1) { e.x = e.x1; e.dir = -1; }
+      e.y = e.baseY + Math.sin(e.ph * 2.4) * e.amp; continue;
+    }
+    const fx = e.x + e.dir * (e.w / 2 + .06);
+    const wall = solidAt(Math.floor(fx), Math.floor(e.y));
+    const low = solidAt(Math.floor(fx), Math.floor(e.y + e.h / 2 + .6));   // no entra a túneles bajos
+    const ground = solidAt(Math.floor(e.x + e.dir * (e.w / 2 + .12)), Math.floor(e.y - e.h / 2 - .15));
+    if (wall || low || !ground) e.dir = -e.dir;
+    e.vx = e.dir * (2 + LV * .25); e.vy = Math.max(e.vy - G * dt, MAX_FALL);
+    moveEntity(e, dt);
+  }
+  enemies = enemies.filter(e => !e.dead || e.deadT > 0);
+}
+
+
+// ------------------------- Jefe: la Aspiradora ----------------------
+function stepBoss(dt) {
+  const b = boss; if (!b) return;
+  b.t += dt;
+  if (b.dead) {
+    b.deathT -= dt;
+    if (Math.random() < .5) poof(b.x + rand(-1.5, 1.5), b.y + rand(-1, 1), [1, rand(.4, .9), .2], 3);
+    if (b.deathT <= 0) { goal.active = true; poof(goal.x, goal.y + 1, [1, .85, .3], 20); boss = null; flash("¡El tazón de comida apareció!"); }
+    return;
+  }
+  if (b.inv > 0) b.inv -= dt;
+  if (b.hintT > 0) b.hintT -= dt;
+  const angry = 3 - b.hp;
+  if (b.suckT > 0) {
+    b.suckT -= dt;
+    if (Math.random() < .6) particles.push({ x: b.x + b.dir * rand(3, 9), y: b.y + rand(-1, 1.2), vx: -b.dir * 9, vy: 0, g: 0, life: .5, max: .5, s0: .25, s1: .1, c: [.9, .95, 1], sq: true });
+  } else {
+    b.cool -= dt;
+    b.x += b.dir * (2.4 + angry * .9) * dt;
+    if (b.x < b.minX) { b.x = b.minX; b.dir = 1; }
+    if (b.x > b.maxX) { b.x = b.maxX; b.dir = -1; }
+    if (b.cool <= 0) { b.suckT = 2.2; b.cool = 4.2 - angry * .6; b.dir = P.x > b.x ? 1 : -1; beep(120, .5, "sawtooth", .03, 60); }
+  }
+}
+// La succión jala al gato hacia la boquilla (se puede resistir corriendo)
+function bossPull() {
+  const b = boss; if (!b || b.dead || b.suckT <= 0) return 0;
+  const dx = P.x - b.x;
+  if (Math.sign(dx) !== b.dir || Math.abs(dx) > 12 || Math.abs(P.y - b.y) > 4) return 0;
+  return -b.dir * 3.6;
+}
+function bossContact(pr, jumpHeld) {
+  const b = boss; if (!b || b.dead) return;
+  if (!overlap(pr, box(b.x, b.y, b.w * .9, b.h * .92))) return;
+  const feet = P.y - P.h / 2, fromAbove = feet > b.y + b.h * .2 && P.prevVy < 1;
+  if (fromAbove) {
+    if (P.pounding && b.inv <= 0) {
+      b.hp--; b.inv = 1.2; P.pounding = false; P.vy = 13; P.prevVy = 13; shake(.35, .3); addScore(1000, b.x, b.y + 2, true);
+      poof(P.x, P.y - P.h / 2, [1, .6, .2], 14); beep(80, .3, "sawtooth", .07, -40);
+      if (b.hp <= 0) { b.dead = true; b.deathT = 1.6; flash("¡Derrotaste a la Aspiradora!"); shake(1.2, .4); addScore(5000, b.x, b.y + 3, true); }
+      else flash("¡Golpe! A la Aspiradora le quedan " + b.hp + " de vida");
+    } else {
+      P.vy = jumpHeld ? 12 : 9; P.prevVy = P.vy; P.pounding = false; beep(300, .08, "square", .04, 100);
+      if (b.hintT <= 0) { flash("¡Solo el golpe pesado de Punkero le hace daño!"); b.hintT = 3; }
+    }
+  } else if (P.invuln <= 0) die();
+}
+function drawBoss() {
+  const b = boss; if (!b) return;
+  if (b.inv > 0 && (b.t * 14 % 1) < .4) return;
+  const L = toSX(b.x - b.w / 2), T = toSY(b.y + b.h / 2), Wp = b.w * S, Hp = b.h * S, d = b.dir;
+  const shakeX = b.suckT > 0 ? rand(-1, 1) * S * .04 : 0;
+  ctx.save(); ctx.translate(shakeX, 0);
+  // cuerpo
+  ctx.fillStyle = b.dead ? "#5a2a2a" : "#8e3fb8"; ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(L, T + Hp * .15, Wp, Hp * .7, S * .4); else ctx.rect(L, T + Hp * .15, Wp, Hp * .7);
+  ctx.fill();
+  ctx.fillStyle = "#b768e0"; ctx.fillRect(L + Wp * .1, T + Hp * .2, Wp * .8, Hp * .12);
+  // tapa con botón (punto débil)
+  ctx.fillStyle = "#5c2680"; ctx.fillRect(L + Wp * .2, T, Wp * .6, Hp * .17);
+  ctx.fillStyle = "#ff4d6d"; ctx.fillRect(L + Wp * .4, T - Hp * .06, Wp * .2, Hp * .08);
+  // ruedas
+  ctx.fillStyle = "#222";
+  for (const fx of [.22, .78]) { ctx.beginPath(); ctx.arc(L + Wp * fx, T + Hp * .88, S * .28, 0, 6.283); ctx.fill(); }
+  // boquilla
+  const nx = d > 0 ? L + Wp : L, ny = T + Hp * .55;
+  ctx.fillStyle = "#444"; ctx.fillRect(d > 0 ? nx : nx - S * .9, ny - S * .25, S * .9, S * .5);
+  ctx.fillStyle = b.suckT > 0 ? "#ffd940" : "#222"; ctx.fillRect(d > 0 ? nx + S * .75 : nx - S * .95, ny - S * .45, S * .2, S * .9);
+  // ojos enojados
+  const ex = L + Wp * (d > 0 ? .62 : .38);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(ex - S * .45, T + Hp * .38, S * .32, S * .32); ctx.fillRect(ex + S * .13, T + Hp * .38, S * .32, S * .32);
+  ctx.fillStyle = "#c00";
+  ctx.fillRect(ex - S * .35 + d * S * .06, T + Hp * .44, S * .14, S * .18); ctx.fillRect(ex + S * .23 + d * S * .06, T + Hp * .44, S * .14, S * .18);
+  ctx.strokeStyle = "#1a0a22"; ctx.lineWidth = S * .08; ctx.beginPath();
+  ctx.moveTo(ex - S * .5, T + Hp * .32); ctx.lineTo(ex - S * .1, T + Hp * .38); ctx.moveTo(ex + S * .5, T + Hp * .32); ctx.lineTo(ex + S * .1, T + Hp * .38); ctx.stroke();
+  ctx.restore();
+  // vida
+  for (let i = 0; i < 3; i++) { ctx.fillStyle = i < b.hp ? "#ff4d6d" : "rgba(255,255,255,0.25)";
+    ctx.fillRect(toSX(b.x - .75 + i * .55), toSY(b.y + b.h / 2 + .7), S * .4, S * .25); }
+}
+
+// ------------------------- Cámara -----------------------------------
+let S = 32, CW = 0, CH = 0;
+function camWanted() {
+  const hh = VIEW_H / 2, hw = hh * CW / CH;
+  const inArena = THEME === "fabrica" && P.x > 106 && goal && !won;
+  const ty = inArena ? 4.2 : P.y + 1.5, tx = inArena ? Math.max(P.x + 1.5, 112 + hw - 4) : P.x + 1.5;
+  return { x: clamp(tx, -1 + hw, Math.max(-1 + hw, W + 1 - hw)), y: clamp(ty, YMIN - 1 + hh, Math.max(YMIN - 1 + hh, YMAX + 2 - hh)) };
+}
+function snapCam() { const w = camWanted(); cam.x = w.x; cam.y = w.y; }
+
+// ------------------------- Bucle principal --------------------------
+const cv = document.getElementById("c"), ctx = cv.getContext("2d");
+function resize() { CW = cv.width = Math.floor(innerWidth * devicePixelRatio); CH = cv.height = Math.floor(innerHeight * devicePixelRatio); S = CH / VIEW_H; ctx.imageSmoothingEnabled = false; }
+addEventListener("resize", resize);
+
+function update(dt) {
+  if (finished) {
+    if (credits) { creditsT += dt; if (creditsDone() || P_("Enter") || P_("Space") || P_("Escape")) backToTitle(); }
+    else if (P_("Enter") || P_("Space")) { credits = true; creditsT = 0; }
+    pressed.clear(); released.clear(); return;
+  }
+  if (gameOver) {
+    if (P_("Enter") || P_("Space")) continueLevel(); else if (P_("Escape")) backToTitle();
+    pressed.clear(); released.clear(); return;
+  }
+  if (P_("KeyR") && started) { score = levelStartScore; resetGame(); flash("¡A intentarlo de nuevo!"); }
+  if (P_("KeyM")) { muted = !muted; flash(muted ? "Sonido apagado" : "Sonido encendido"); }
+  if (won && (P_("Enter") || P_("Space") || P_("KeyN"))) { nextLevel(); pressed.clear(); released.clear(); return; }
+  if (started && !won) { stepPlayer(dt); stepEnemies(dt); stepBoss(dt); time += dt; }
+  else if (won) { P.vx = 0; stepEnemies(dt); }
+  for (const p of particles) { p.life -= dt; p.vy -= p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+  particles = particles.filter(p => p.life > 0);
+  for (const w of winds) for (const s of w.streaks) { s.y += 9 * dt; if (s.y > w.rect.h / 2) { s.y = -w.rect.h / 2; s.x = rand(-w.rect.w / 2, w.rect.w / 2); } }
+  if (hintT > 0) hintT -= dt; if (msgT > 0) msgT -= dt;
+  for (const k in uiFx) if (uiFx[k] > 0) uiFx[k] = Math.max(0, uiFx[k] - dt);
+  if (abilityToast.t > 0) abilityToast.t -= dt;
+  for (const p of popups) p.t -= dt * .9;
+  popups = popups.filter(p => p.t > 0);
+  // animación del gato
+  const k = 1 - Math.exp(-12 * dt); P.sqx = lerp(P.sqx, 1, k); P.sqy = lerp(P.sqy, 1, k);
+  if (!(P.dying > 0)) { const w = camWanted(), kc = 1 - Math.exp(-10 * dt); cam.x = lerp(cam.x, w.x, kc); cam.y = lerp(cam.y, w.y, kc); }
+  if (shakeT > 0) { shakeT -= dt; if (shakeT <= 0) shakeA = 0; }
+  pressed.clear(); released.clear();
+}
+
+// ------------------------- Dibujo -----------------------------------
+let camR = { x: 0, y: 0 };
+const toSX = x => (x - camR.x) * S + CW / 2, toSY = y => CH / 2 - (y - camR.y) * S;
+function drawSpr(sp, x, y, sx = 1, sy = 1, rot = 0, alpha = 1) {
+  const w = sp.w / 16 * S * Math.abs(sx), h = sp.h / 16 * S * sy;
+  ctx.save(); ctx.globalAlpha = alpha; ctx.translate(toSX(x), toSY(y)); if (rot) ctx.rotate(-rot);
+  if (sx < 0) ctx.scale(-1, 1);
+  ctx.drawImage(sp.img, -sp.px * w, -(1 - sp.py) * h, w, h); ctx.restore();
+}
+function drawCell(sp, x, y) {
+  const x0 = Math.round(toSX(x)), x1 = Math.round(toSX(x + 1)), y0 = Math.round(toSY(y + 1)), y1 = Math.round(toSY(y));
+  ctx.drawImage(sp.img, x0, y0, x1 - x0, y1 - y0);
+}
+
+function render() {
+  camR.x = cam.x + (shakeT > 0 ? rand(-shakeA, shakeA) : 0); camR.y = cam.y + (shakeT > 0 ? rand(-shakeA, shakeA) : 0);
+  const TH = SPR.themes[THEME], t = performance.now() / 1000;
+  const hw = CW / S / 2, hh = VIEW_H / 2;
+  const x0 = Math.floor(camR.x - hw) - 1, x1 = Math.ceil(camR.x + hw) + 1, y0 = Math.floor(camR.y - hh) - 1, y1 = Math.ceil(camR.y + hh) + 1;
+  drawBackground(TH, t, x0, x1, y0, y1);
+  for (const r of darkRects) for (let x = Math.max(x0, r[0]); x <= Math.min(x1, r[1]); x++) for (let y = Math.max(y0, r[2]); y <= Math.min(y1, r[3]); y++) drawCell(TH.dark, x, y);
+
+  for (const w of winds) {
+    const r = w.rect; ctx.fillStyle = "rgba(217,242,255,0.18)";
+    ctx.fillRect(toSX(r.cx - r.w / 2), toSY(r.cy + r.h / 2), r.w * S, r.h * S);
+    ctx.fillStyle = "rgba(255,255,255,0.6)";
+    for (const s of w.streaks) ctx.fillRect(toSX(r.cx + s.x) - S / 16, toSY(r.cy + s.y) - S * .375, S / 8, S * .75);
+  }
+
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+    const c = cellAt(x, y);
+    if (c === "#") drawCell(isSolidChar(cellAt(x, y + 1)) ? TH.body : TH.top, x, y);
+    else if (c === "|") drawCell(SPR.climb, x, y);
+    else if (c === "B") drawCell(SPR.breakable, x, y);
+  }
+
+  for (const f of flowers) if (f.x > x0 && f.x < x1) drawSpr(SPR.flowers[f.k], f.x, f.y);
+  drawLiquids(t);
+  for (const s of signs) drawSpr(SPR.sign, s.x, s.s);
+  for (const c of checkpoints) drawSpr(c.active ? SPR.flagOn : SPR.flagOff, c.x, c.s);
+  for (const s of spikes) for (let x = s.x0; x <= s.x1; x++) drawSpr(SPR.spikes, x + .5, s.s);
+  if (goal.active) drawSpr(SPR.bowl, goal.x, goal.y, 1.6, 1.6);
+  drawBoss();
+  for (const f of fishes) if (!f.taken) drawSpr(f.bell ? SPR.bell : SPR.fish, f.x, f.y + Math.sin(t * 3 + f.x * .7) * .08, f.bell ? 1.2 : 1, f.bell ? 1.2 : 1, f.bell ? Math.sin(t * 6) * .2 : 0);
+
+  for (const e of enemies) {
+    const sx = e.dir < 0 ? -1 : 1;
+    if (e.fly) {
+      const kind = (THEME === "alcantarilla" || THEME === "fabrica") ? "bat" : "pigeon", fr = SPR.birds[kind][Math.floor(t * 8 + e.ph) % 2];
+      drawSpr(fr, e.x, e.y, sx * 1.45, e.dead ? .6 : 1.45); continue;
+    }
+    if (e.dead) drawSpr(SPR.mouse, e.x, e.y - .18, sx * 1.2, .35);
+    else drawSpr(SPR.mouse, e.x, e.y + .02 + Math.abs(Math.sin(t * 10)) * .05, sx, 1);
+  }
+
+  // jugador
+  const d = CATS[P.cat];
+  const visible = P.invuln <= 0 || (t * 12 % 1) > .35;
+  if (visible) {
+    const s = d.h / (14 / 16);
+    const bob = (P.grounded && Math.abs(inp.x()) > .1 && !won) ? Math.abs(Math.sin(t * 18)) * .06 : 0;
+    const rot = P.dying > 0 ? P.spin : P.gliding ? (-8 * P.facing) * Math.PI / 180 : (P.climbing ? (80 * P.facing) * Math.PI / 180 : 0);
+    drawSpr(d.spr, P.x, P.y - d.h * (1 - P.sqy) / 2 + bob, s * P.sqx * P.facing, s * P.sqy, rot);
+  }
+
+  for (const p of particles) {
+    const k = 1 - p.life / p.max, sc = lerp(p.s0, p.s1, k);
+    ctx.fillStyle = rgba(p.c, 1 - k);
+    if (p.sq) { const z = .25 * sc * S; ctx.fillRect(toSX(p.x) - z / 2, toSY(p.y) - z / 2, z, z); }
+    else { ctx.beginPath(); ctx.arc(toSX(p.x), toSY(p.y), .5 * sc * S, 0, 6.283); ctx.fill(); }
+  }
+  drawHUD();
+}
+
+
+function drawBackground(TH, t, x0, x1, y0, y1) {
+  if (THEME === "casa" || THEME === "jardin") {
+    ctx.fillStyle = "#87ccfa"; ctx.fillRect(0, 0, CW, CH);
+    for (const h of hills) drawSpr(SPR.hill, h.x + camR.x * .8, h.y + camR.y * .8, h.s, h.s);
+    for (const c of clouds) drawSpr(SPR.cloud, c.x + camR.x * .6, c.y + camR.y * .6, c.s, c.s, 0, .9);
+  } else if (THEME === "tejados") {
+    const g = ctx.createLinearGradient(0, 0, 0, CH); g.addColorStop(0, "#3b2a63"); g.addColorStop(.6, "#c9667a"); g.addColorStop(1, "#f7a865");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, CW, CH);
+    ctx.fillStyle = "rgba(255,230,170,0.9)"; ctx.beginPath(); ctx.arc(CW * .72, CH * .62, S * 2.2, 0, 6.283); ctx.fill();
+    for (const c of clouds) drawSpr(SPR.cloud, c.x + camR.x * .6, c.y + camR.y * .6, c.s, c.s, 0, .35);
+    for (const b of city) {
+      const bx = b.x + camR.x * .5, by = -4 + camR.y * .5;
+      const L = toSX(bx), R = toSX(bx + b.w), T = toSY(by + b.h), B = toSY(by);
+      if (R < 0 || L > CW) continue;
+      ctx.fillStyle = "#2c1d3f"; ctx.fillRect(L, T, R - L, B - T);
+      ctx.fillStyle = "rgba(255,214,110,0.8)";
+      for (let wy = 1; wy < b.h - .5; wy += 1.3) for (let wx = .4; wx < b.w - .4; wx += .9)
+        if (((b.win + Math.floor(wx * 7) + Math.floor(wy * 13)) % 5) === 0) ctx.fillRect(toSX(bx + wx), toSY(by + wy + .5), S * .3, S * .4);
+    }
+  } else if (THEME === "alcantarilla") {
+    ctx.fillStyle = "#0b100e"; ctx.fillRect(0, 0, CW, CH);
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) if (!solidAt(x, y)) drawCell(TH.dark, x, y);
+  } else if (THEME === "fabrica") {
+    const g = ctx.createLinearGradient(0, 0, 0, CH); g.addColorStop(0, "#1c2029"); g.addColorStop(1, "#3d3030");
+    ctx.fillStyle = g; ctx.fillRect(0, 0, CW, CH);
+    ctx.fillStyle = "rgba(160,170,190,0.10)";
+    for (const gr of gears) {
+      const gx = toSX(gr.x + camR.x * .5), gy = toSY(gr.y + camR.y * .5), rr = gr.r * S, a = t * gr.sp;
+      if (gx < -rr * 2 || gx > CW + rr * 2) continue;
+      ctx.save(); ctx.translate(gx, gy); ctx.rotate(a);
+      ctx.beginPath(); ctx.arc(0, 0, rr, 0, 6.283); ctx.arc(0, 0, rr * .35, 0, 6.283, true); ctx.fill("evenodd");
+      for (let i = 0; i < 8; i++) { ctx.rotate(Math.PI / 4); ctx.fillRect(-rr * .15, -rr * 1.25, rr * .3, rr * .3); }
+      ctx.restore();
+    }
+  }
+}
+function drawLiquids(t) {
+  for (const l of liquids) {
+    const L = toSX(l.x0), R = toSX(l.x1), T = toSY(l.top), B = toSY(l.bot);
+    if (R < 0 || L > CW) continue;
+    const col = l.kind === "toxico" ? [.42, .9, .2] : [.25, .55, .95];
+    ctx.fillStyle = rgba(col, .85); ctx.fillRect(L, T, R - L, B - T);
+    ctx.fillStyle = rgba([Math.min(1, col[0] + .35), Math.min(1, col[1] + .2), Math.min(1, col[2] + .1)], .9);
+    for (let x = l.x0; x < l.x1; x += .25) {
+      const wv = Math.sin(t * 3 + x * 2) * .06;
+      ctx.fillRect(toSX(x), toSY(l.top + .08 + wv), S * .26, S * .1);
+    }
+    if (l.kind === "toxico" && Math.random() < .05) particles.push({ x: rand(l.x0, l.x1), y: l.top, vx: 0, vy: 1, g: 0, life: .6, max: .6, s0: .2, s1: .35, c: [.6, 1, .3], sq: false });
+  }
+}
+
+// ------------------------- HUD --------------------------------------
+// =====================================================================
+//  Tipografía pixel-art propia (5x7 + 2 filas para tildes). No necesita internet.
+// =====================================================================
+const GLYPHS = {
+  "A": [".###.", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+  "B": ["####.", "#...#", "#...#", "####.", "#...#", "#...#", "####."],
+  "C": [".###.", "#...#", "#....", "#....", "#....", "#...#", ".###."],
+  "D": ["####.", "#...#", "#...#", "#...#", "#...#", "#...#", "####."],
+  "E": ["#####", "#....", "#....", "####.", "#....", "#....", "#####"],
+  "F": ["#####", "#....", "#....", "####.", "#....", "#....", "#...."],
+  "G": [".###.", "#...#", "#....", "#.###", "#...#", "#...#", ".####"],
+  "H": ["#...#", "#...#", "#...#", "#####", "#...#", "#...#", "#...#"],
+  "I": [".###.", "..#..", "..#..", "..#..", "..#..", "..#..", ".###."],
+  "J": ["..###", "...#.", "...#.", "...#.", "#..#.", "#..#.", ".##.."],
+  "K": ["#...#", "#..#.", "#.#..", "##...", "#.#..", "#..#.", "#...#"],
+  "L": ["#....", "#....", "#....", "#....", "#....", "#....", "#####"],
+  "M": ["#...#", "##.##", "#.#.#", "#.#.#", "#...#", "#...#", "#...#"],
+  "N": ["#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#", "#...#"],
+  "O": [".###.", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+  "P": ["####.", "#...#", "#...#", "####.", "#....", "#....", "#...."],
+  "Q": [".###.", "#...#", "#...#", "#...#", "#.#.#", "#..#.", ".##.#"],
+  "R": ["####.", "#...#", "#...#", "####.", "#.#..", "#..#.", "#...#"],
+  "S": [".####", "#....", "#....", ".###.", "....#", "....#", "####."],
+  "T": ["#####", "..#..", "..#..", "..#..", "..#..", "..#..", "..#.."],
+  "U": ["#...#", "#...#", "#...#", "#...#", "#...#", "#...#", ".###."],
+  "V": ["#...#", "#...#", "#...#", "#...#", "#...#", ".#.#.", "..#.."],
+  "W": ["#...#", "#...#", "#...#", "#.#.#", "#.#.#", "##.##", "#...#"],
+  "X": ["#...#", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "#...#"],
+  "Y": ["#...#", "#...#", ".#.#.", "..#..", "..#..", "..#..", "..#.."],
+  "Z": ["#####", "....#", "...#.", "..#..", ".#...", "#....", "#####"],
+  "0": [".###.", "#...#", "#..##", "#.#.#", "##..#", "#...#", ".###."],
+  "1": ["..#..", ".##..", "..#..", "..#..", "..#..", "..#..", ".###."],
+  "2": [".###.", "#...#", "....#", "...#.", "..#..", ".#...", "#####"],
+  "3": ["#####", "...#.", "..#..", "...#.", "....#", "#...#", ".###."],
+  "4": ["...#.", "..##.", ".#.#.", "#..#.", "#####", "...#.", "...#."],
+  "5": ["#####", "#....", "####.", "....#", "....#", "#...#", ".###."],
+  "6": ["..##.", ".#...", "#....", "####.", "#...#", "#...#", ".###."],
+  "7": ["#####", "....#", "...#.", "..#..", ".#...", ".#...", ".#..."],
+  "8": [".###.", "#...#", "#...#", ".###.", "#...#", "#...#", ".###."],
+  "9": [".###.", "#...#", "#...#", ".####", "....#", "...#.", ".##.."],
+  " ": [".....", ".....", ".....", ".....", ".....", ".....", "....."],
+  ".": [".....", ".....", ".....", ".....", ".....", "..##.", "..##."],
+  ",": [".....", ".....", ".....", ".....", "..##.", "..##.", ".##.."],
+  "!": ["..#..", "..#..", "..#..", "..#..", "..#..", ".....", "..#.."],
+  "¡": ["..#..", ".....", "..#..", "..#..", "..#..", "..#..", "..#.."],
+  "?": [".###.", "#...#", "....#", "...#.", "..#..", ".....", "..#.."],
+  "¿": ["..#..", ".....", "..#..", ".#...", "#....", "#...#", ".###."],
+  ":": [".....", "..#..", ".....", ".....", ".....", "..#..", "....."],
+  ";": [".....", "..#..", ".....", ".....", "..#..", "..#..", ".#..."],
+  "-": [".....", ".....", ".....", ".###.", ".....", ".....", "....."],
+  "—": [".....", ".....", ".....", "#####", ".....", ".....", "....."],
+  "+": [".....", "..#..", "..#..", "#####", "..#..", "..#..", "....."],
+  "=": [".....", ".....", "#####", ".....", "#####", ".....", "....."],
+  "/": ["....#", "....#", "...#.", "..#..", ".#...", "#....", "#...."],
+  "(": ["...#.", "..#..", ".#...", ".#...", ".#...", "..#..", "...#."],
+  ")": [".#...", "..#..", "...#.", "...#.", "...#.", "..#..", ".#..."],
+  "'": ["..#..", "..#..", ".....", ".....", ".....", ".....", "....."],
+  "\"": [".#.#.", ".#.#.", ".....", ".....", ".....", ".....", "....."],
+  "%": ["##..#", "##.#.", "...#.", "..#..", ".#...", ".#.##", "#..##"],
+  "·": [".....", ".....", ".....", "..#..", ".....", ".....", "....."],
+  "×": [".....", "#...#", ".#.#.", "..#..", ".#.#.", "#...#", "....."],
+  "→": [".....", "..#..", "...#.", "#####", "...#.", "..#..", "....."],
+  "▲": [".....", "..#..", ".###.", "#####", ".....", ".....", "....."],
+  "▼": [".....", "#####", ".###.", "..#..", ".....", ".....", "....."],
+  "◀": ["....#", "...##", "..###", ".####", "..###", "...##", "....#"],
+  "▶": ["#....", "##...", "###..", "####.", "###..", "##...", "#...."],
+  "↻": [".###.", "#...#", "#....", "#..#.", "#.###", "#...#", ".###."],
+  "♪": ["..##.", "..#.#", "..#..", "..#..", ".##..", "###..", ".#..."],
+  "♥": [".#.#.", "#####", "#####", "#####", ".###.", "..#..", "....."],
+  "★": ["..#..", "..#..", "#####", ".###.", ".#.#.", "#...#", "....."],
+};
+const ACCENTS = { acute: ["...#.", "..#.."], tilde: [".##.#", "#..#."], dier: [".#.#.", "....."] };
+const ACCENTED = { "Á": ["A", "acute"], "É": ["E", "acute"], "Í": ["I", "acute"], "Ó": ["O", "acute"], "Ú": ["U", "acute"], "Ñ": ["N", "tilde"], "Ü": ["U", "dier"] };
+function glyphRows(ch) {
+  if (ACCENTED[ch]) { const [b, a] = ACCENTED[ch]; return ACCENTS[a].concat(GLYPHS[b]); }
+  return [".....", "....."].concat(GLYPHS[ch] || GLYPHS["?"]);
+}
+const textCache = new Map();
+const C255 = c => [Math.round(c[0] * 255), Math.round(c[1] * 255), Math.round(c[2] * 255)];
+// Crea (y guarda) un lienzo con el texto: relleno de dos tonos, contorno y sombra
+function textCanvas(str, c1, c2, oc) {
+  const key = str + "|" + c1 + "|" + c2 + "|" + oc;
+  let cvt = textCache.get(key); if (cvt) return cvt;
+  if (textCache.size > 600) textCache.clear();
+  const s = str.toUpperCase(), n = s.length, w = n * 6 + 3, h = 9 + 3;
+  const main = new Uint8Array(w * h);
+  for (let i = 0; i < n; i++) {
+    const rows = glyphRows(s[i]);
+    for (let r = 0; r < 9; r++) for (let c = 0; c < 5; c++) if (rows[r][c] === "#") main[(1 + r) * w + 1 + i * 6 + c] = r < 6 ? 1 : 2;
+  }
+  cvt = document.createElement("canvas"); cvt.width = w; cvt.height = h;
+  const g = cvt.getContext("2d"), img = g.createImageData(w, h), A = C255(c1), B = C255(c2), O = C255(oc);
+  const put = (i, col, a) => { img.data[i * 4] = col[0]; img.data[i * 4 + 1] = col[1]; img.data[i * 4 + 2] = col[2]; img.data[i * 4 + 3] = a; };
+  // contorno alrededor de las letras y sombra desplazada abajo-derecha
+  const nearMain = (x, y) => { for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+    const xx = x + dx, yy = y + dy; if (xx >= 0 && yy >= 0 && xx < w && yy < h && main[yy * w + xx]) return true; } return false; };
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x; if (main[i]) continue;
+    if (nearMain(x, y)) put(i, O, 255);
+    else if (nearMain(x - 1, y - 1)) put(i, O, 140);
+  }
+  for (let i = 0; i < w * h; i++) if (main[i]) put(i, main[i] === 1 ? A : B, 255);
+  g.putImageData(img, 0, 0);
+  textCache.set(key, cvt);
+  return cvt;
+}
+const textW = (s, px) => (s.length * 6 + 3) * px;
+// Dibuja texto pixel-art. px = tamaño de cada "pixel" de la letra (en unidades del HUD)
+function ptext(s, x, y, px, o = {}) {
+  s = String(s);
+  const c1 = o.c || [1, 1, 1], c2 = o.c2 || c1, oc = o.o || [.08, .05, .1];
+  const cvt = textCanvas(s, c1, c2, oc), w = cvt.width * px, h = cvt.height * px;
+  const xx = o.align === "center" ? x - w / 2 : o.align === "right" ? x - w : x;
+  ctx.imageSmoothingEnabled = false;
+  if (o.alpha !== undefined) ctx.globalAlpha = o.alpha;
+  ctx.drawImage(cvt, Math.round(xx), Math.round(y), w, h);
+  ctx.globalAlpha = 1;
+  return w;
+}
+// Texto con letras que saltan
+function ptextWave(s, x, y, px, o, t, amp = 3, speed = 6) {
+  s = String(s); const total = textW(s, px); let xx = o.align === "center" ? x - total / 2 : x;
+  for (let i = 0; i < s.length; i++) {
+    ptext(s[i], xx, y + Math.sin(t * speed + i * .6) * amp, px, Object.assign({}, o, { align: "left" }));
+    xx += 6 * px;
+  }
+}
+function wrapChars(s, maxChars) {
+  const words = s.split(" "), lines = []; let line = "";
+  for (const w of words) { const test = line ? line + " " + w : w; if (test.length > maxChars && line) { lines.push(line); line = w; } else line = test; }
+  if (line) lines.push(line); return lines;
+}
+
+// =====================================================================
+//  Estilo de la interfaz según el mundo
+// =====================================================================
+const UI = {
+  casa: { bg: [.36, .22, .12], bg2: [.46, .3, .17], border: [.88, .62, .32], dark: [.16, .09, .04], text: [1, .95, .82], a1: [1, .8, .3], a2: [.95, .5, .15], deco: "wood", label: "MUNDO 1" },
+  jardin: { bg: [.15, .36, .15], bg2: [.21, .46, .19], border: [.62, .92, .36], dark: [.05, .16, .05], text: [.95, 1, .88], a1: [1, .92, .35], a2: [1, .5, .6], deco: "leaf", label: "MUNDO 2" },
+  tejados: { bg: [.13, .07, .23], bg2: [.19, .1, .31], border: [1, .38, .78], dark: [.04, .01, .09], text: [1, .9, 1], a1: [1, .55, .9], a2: [.5, .85, 1], deco: "neon", label: "MUNDO 3" },
+  alcantarilla: { bg: [.07, .13, .09], bg2: [.1, .18, .12], border: [.45, .95, .25], dark: [.02, .05, .03], text: [.86, 1, .8], a1: [.62, 1, .35], a2: [.22, .7, .15], deco: "slime", label: "MUNDO 4" },
+  fabrica: { bg: [.24, .26, .31], bg2: [.31, .33, .39], border: [.96, .78, .15], dark: [.08, .08, .1], text: [1, 1, 1], a1: [1, .84, .2], a2: [.95, .48, .1], deco: "hazard", label: "MUNDO 5" },
+};
+const THEME_OF_LEVEL = ["casa", "jardin", "tejados", "alcantarilla", "fabrica"];
+const css = (c, a = 1) => rgba(c, a);
+
+// Panel con el estilo del mundo (bordes gruesos tipo pixel-art y decoración animada)
+function themedPanel(x, y, w, h, th, t) {
+  const U = UI[th];
+  x = Math.round(x); y = Math.round(y); w = Math.round(w); h = Math.round(h);
+  if (U.deco === "neon") { ctx.save(); ctx.shadowColor = css(U.border); ctx.shadowBlur = 14 + Math.sin(t * 8) * 4; }
+  ctx.fillStyle = css(U.dark); ctx.fillRect(x - 4, y - 4, w + 8, h + 8);
+  ctx.fillStyle = css(U.border); ctx.fillRect(x, y, w, h);
+  if (U.deco === "neon") ctx.restore();
+  ctx.fillStyle = css(U.bg); ctx.fillRect(x + 5, y + 5, w - 10, h - 10);
+  ctx.fillStyle = css(U.bg2); ctx.fillRect(x + 5, y + 5, w - 10, Math.round((h - 10) * .45));
+  ctx.fillStyle = "rgba(255,255,255,0.18)"; ctx.fillRect(x + 5, y + 5, w - 10, 3);
+  ctx.fillStyle = "rgba(0,0,0,0.25)"; ctx.fillRect(x + 5, y + h - 8, w - 10, 3);
+  if (U.deco === "wood") {
+    ctx.fillStyle = "rgba(0,0,0,0.12)";
+    for (let yy = y + 14; yy < y + h - 8; yy += 12) ctx.fillRect(x + 8, yy, w - 16, 2);
+    ctx.fillStyle = "#c9c0b0"; for (const [nx, ny] of [[x + 9, y + 9], [x + w - 14, y + 9], [x + 9, y + h - 14], [x + w - 14, y + h - 14]]) ctx.fillRect(nx, ny, 5, 5);
+  } else if (U.deco === "leaf") {
+    for (let i = 0; i < 4; i++) {
+      const lx = i < 2 ? x - 6 : x + w - 6, ly = i % 2 ? y + h - 8 : y - 8, bob = Math.sin(t * 3 + i) * 2;
+      ctx.fillStyle = "#3f9b35"; ctx.fillRect(lx, ly + bob, 12, 8); ctx.fillStyle = "#6fd14e"; ctx.fillRect(lx + 2, ly + 2 + bob, 6, 3);
+    }
+    const fc = ["#ff5a6e", "#ffd93b", "#b77bff"];
+    for (let i = 0; i < Math.floor(w / 60); i++) { const fx = x + 30 + i * 60, fy = y - 6 + Math.sin(t * 4 + i) * 1.5;
+      ctx.fillStyle = fc[i % 3]; ctx.fillRect(fx - 4, fy, 8, 8); ctx.fillStyle = "#fff6a0"; ctx.fillRect(fx - 1, fy + 3, 3, 3); }
+  } else if (U.deco === "slime") {
+    ctx.fillStyle = css(U.border);
+    for (let i = 0; i < Math.floor(w / 36); i++) { const dx = x + 18 + i * 36 + (i * 13) % 11, len = 6 + (Math.sin(t * 2 + i * 1.7) * .5 + .5) * 14;
+      ctx.fillRect(dx, y + h, 5, len); ctx.fillRect(dx - 1, y + h + len - 2, 7, 6); }
+  } else if (U.deco === "hazard") {
+    const off = (t * 30) % 20;
+    for (const yy of [y + 5, y + h - 10]) { ctx.save(); ctx.beginPath(); ctx.rect(x + 5, yy, w - 10, 5); ctx.clip();
+      for (let xx = x - 20 + off; xx < x + w; xx += 20) { ctx.fillStyle = "#f5c518"; ctx.fillRect(xx, yy, 10, 5); ctx.fillStyle = "#1a1a1e"; ctx.fillRect(xx + 10, yy, 10, 5); }
+      ctx.restore(); }
+    ctx.fillStyle = "#d8dce6"; for (const [nx, ny] of [[x + 10, y + 13], [x + w - 15, y + 13], [x + 10, y + h - 18], [x + w - 15, y + h - 18]]) ctx.fillRect(nx, ny, 5, 5);
+  }
+}
+
+// Letrero del mundo (arriba a la derecha) con letras según la temática
+let uiDrips = [];
+function worldPlaque(xr, y, th, t) {
+  const U = UI[th], name = LEVELS[LV].name.toUpperCase(), px = 3, gearW = U.deco === "hazard" ? 30 : 0, w = Math.max(textW(name, px), textW(U.label, 2)) + 44 + gearW, h = 72, x = xr - w;
+  ctx.save();
+  if (U.deco === "wood") {   // letrero colgando que se balancea
+    const ang = Math.sin(t * 1.6) * .03; ctx.translate(x + w / 2, y - 10); ctx.rotate(ang); ctx.translate(-(x + w / 2), -(y - 10));
+    ctx.fillStyle = "#6b4a2b"; ctx.fillRect(x + 24, y - 12, 4, 14); ctx.fillRect(x + w - 28, y - 12, 4, 14);
+  }
+  themedPanel(x, y, w, h, th, t);
+  ptext(U.label, x + w / 2, y + 10, 2, { align: "center", c: U.a2, c2: shade(U.a2, .8), o: U.dark });
+  if (U.deco === "leaf") ptextWave(name, x + w / 2, y + 30, px, { align: "center", c: U.a1, c2: U.a2, o: U.dark }, t, 2.5, 5);
+  else if (U.deco === "neon") {
+    const on = Math.sin(t * 13) > -.85 || Math.random() > .3;
+    ctx.save(); ctx.shadowColor = css(U.a1); ctx.shadowBlur = on ? 16 : 2;
+    ptext(name, x + w / 2, y + 30, px, { align: "center", c: on ? U.a1 : shade(U.a1, .45), c2: on ? U.a2 : shade(U.a2, .45), o: U.dark });
+    ctx.restore();
+  } else if (U.deco === "slime") {
+    ptext(name, x + w / 2, y + 30, px, { align: "center", c: U.a1, c2: U.a2, o: U.dark });
+    if (Math.random() < .08) uiDrips.push({ x: x + 22 + Math.random() * (w - 44), y: y + 58, vy: 0, life: 1.2 });
+  } else if (U.deco === "hazard") {
+    ptext(name, x + w / 2 + gearW / 2, y + 30, px, { align: "center", c: U.a1, c2: U.a2, o: U.dark });
+    drawGearIcon(x + 26, y + 44, 11, t * 2.5, "#f5c518");
+  } else ptext(name, x + w / 2, y + 30, px, { align: "center", c: U.a1, c2: U.a2, o: U.dark });
+  ctx.restore();
+  // gotas verdes cayendo de las letras (alcantarillas)
+  for (const d of uiDrips) { d.vy += 300 * (1 / 60); d.y += d.vy / 60; d.life -= 1 / 60; ctx.fillStyle = css(U.border, Math.max(0, d.life)); ctx.fillRect(d.x, d.y, 4, 6); }
+  uiDrips = uiDrips.filter(d => d.life > 0);
+  return w;
+}
+function drawGearIcon(cx, cy, r, a, col) {
+  ctx.save(); ctx.translate(cx, cy); ctx.rotate(a); ctx.fillStyle = col;
+  for (let i = 0; i < 8; i++) { ctx.rotate(Math.PI / 4); ctx.fillRect(-r * .22, -r * 1.25, r * .44, r * .5); }
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, 6.283); ctx.fill(); ctx.fillStyle = "#1a1a1e"; ctx.beginPath(); ctx.arc(0, 0, r * .4, 0, 6.283); ctx.fill();
+  ctx.restore();
+}
+function iconSprite(sp, x, y, h, scale = 1) {
+  const w = sp.w / sp.h * h; ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(sp.img, x - w * scale / 2, y - h * scale / 2, w * scale, h * scale);
+}
+
+// En celular, los letreros hablan de botones en vez de teclas
+const MOBILE_TEXT = [
+  ["Muévete con A/D o las flechas y salta con Espacio. Cambia de gato con 1-5 o Q/E.", "Muévete con ◀ ▶ y salta con SALTO. Toca un gato abajo para cambiar de gato."],
+  ["Pulsa Espacio otra vez en el aire", "Toca SALTO otra vez en el aire"],
+  ["Salta y pulsa S / Abajo en el aire", "Salta y toca ▼ golpe en el aire"],
+  ["Espacio para saltar desde el muro.", "SALTO para saltar desde el muro."],
+  ["mantén Espacio mientras caes", "mantén SALTO mientras caes"],
+];
+function mobileText(t) { for (const [a, b] of MOBILE_TEXT) t = t.replace(a, b); return t; }
+const clock = t => Math.floor(t / 60) + ":" + String(Math.floor(t % 60)).padStart(2, "0");
+const pad6 = n => String(Math.max(0, Math.floor(n))).padStart(6, "0");
+let gameOverRects = [];
+
+
+// =====================================================================
+//  CRÉDITOS (edita esta lista libremente)
+//  tipo: "titulo" grande · "cab" encabezado · "" texto normal · cat: índice del gato a mostrar
+// =====================================================================
+const CREDITS = [
+  { t: "GATITOS", k: "titulo" },
+  {},
+  { t: "AVENTUREROS", k: "titulo" },
+  {}, {},
+  { t: "UN JUEGO DE", k: "cab" },
+  { t: "DERECK PROAÑO", k: "grande" },
+  {},
+  { t: "IDEA Y DISEÑO", k: "cab" }, { t: "DERECK PROAÑO" },
+  { t: "PROGRAMACIÓN", k: "cab" }, { t: "DERECK PROAÑO" },
+  { t: "ARTE Y NIVELES", k: "cab" }, { t: "DERECK PROAÑO" },
+  { t: "SONIDO", k: "cab" }, { t: "DERECK PROAÑO" },
+  {},
+  { t: "REPARTO", k: "cab" },
+  { t: "NARITO · COMO ÉL MISMO", cat: 0 },
+  { t: "COWI · COMO ÉL MISMO", cat: 1 },
+  { t: "PUNKERO · COMO ÉL MISMO", cat: 2 },
+  { t: "ROCKERA · COMO ELLA MISMA", cat: 3 },
+  { t: "RAPERA · COMO ELLA MISMA", cat: 4 },
+  { t: "LA ASPIRADORA GIGANTE · LA VILLANA" },
+  {},
+  { t: "MUNDOS", k: "cab" },
+  { t: "1 · LA CASA" }, { t: "2 · EL JARDÍN" }, { t: "3 · LOS TEJADOS" }, { t: "4 · LAS ALCANTARILLAS" }, { t: "5 · LA FÁBRICA DE ATÚN" },
+  {},
+  { t: "AGRADECIMIENTOS ESPECIALES", k: "cab" },
+  { t: "A NARITO, COWI, PUNKERO," }, { t: "ROCKERA Y RAPERA," }, { t: "LOS GATOS DE VERDAD" },
+  { t: "Y A TI, POR JUGAR" },
+  {},
+  { t: "DERECKPUDLA.ITCH.IO", k: "cab" },
+  {}, {},
+  { t: "♥", k: "corazon" },
+  {},
+  { t: "Un juego sencillo pero hecho", k: "dedic" },
+  { t: "con mucho cariño,", k: "dedic" },
+  { t: "todo gatito que pase por tus manos", k: "dedic" },
+  { t: "será muy afortunado.", k: "dedic" },
+  {},
+  { t: "Gracias por cuidarlos tanto", k: "dedic" },
+  { t: "y con tanto amor.", k: "dedic" },
+  {},
+  { t: "Gracias por ser así,", k: "dedic" },
+  { t: "nunca pero nunca pierdas", k: "dedic" },
+  { t: "eso que te hace ser tú", k: "dedic" },
+  {},
+  { t: "♥", k: "corazon" },
+  {}, {}, {},
+  { t: "FIN", k: "titulo" },
+];
+const CREDIT_GAP = 46, CREDIT_SPEED = 55;
+let credits = false, creditsT = 0;
+const creditsMaxScroll = () => 720 + (CREDITS.length - 1) * CREDIT_GAP - 300;
+const creditsDone = () => creditsT * CREDIT_SPEED > creditsMaxScroll() + 4 * CREDIT_SPEED;
+let creditStars = null;
+function drawCredits(Wv, t) {
+  const g = ctx.createLinearGradient(0, 0, 0, 720); g.addColorStop(0, "#0b0716"); g.addColorStop(1, "#2a1238");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, Wv, 720);
+  if (!creditStars) { const r = rng(7); creditStars = []; for (let i = 0; i < 90; i++) creditStars.push([r(), r() * 720, r() * 6]); }
+  for (const st of creditStars) { const a = .3 + .7 * Math.abs(Math.sin(t * 1.5 + st[2])); ctx.fillStyle = `rgba(255,240,200,${a})`; ctx.fillRect(st[0] * Wv, st[1], 3, 3); }
+  const scroll = Math.min(creditsT * CREDIT_SPEED, creditsMaxScroll());
+  CREDITS.forEach((c, i) => {
+    if (!c.t) return;
+    const y = 720 + i * CREDIT_GAP - scroll; if (y < -80 || y > 760) return;
+    if (c.k === "titulo") ptextWave(c.t, Wv / 2, y - 10, 8, { align: "center", c: [1, .85, .25], c2: [1, .5, .15], o: [.12, .05, .1] }, t, 5, 4);
+    else if (c.k === "grande") ptext(c.t, Wv / 2, y, 5, { align: "center", c: [1, 1, 1], c2: [.85, .85, .95] });
+    else if (c.k === "cab") ptext(c.t, Wv / 2, y + 6, 2, { align: "center", c: [1, .55, .8], c2: [.85, .4, .7] });
+    else if (c.k === "dedic") ptext(c.t, Wv / 2, y, 3, { align: "center", c: [1, .86, .92], c2: [1, .68, .8], o: [.18, .05, .12] });
+    else if (c.k === "corazon") { const beat = 1 + Math.max(0, Math.sin(t * 5)) * .25; ptext("♥", Wv / 2, y - 8 * beat, 5 * beat, { align: "center", c: [1, .35, .5], c2: [.85, .15, .3] }); }
+    else if (c.cat !== undefined) {
+      const w = textW(c.t, 3);
+      iconSprite(CATS[c.cat].spr, Wv / 2 - w / 2 - 40, y + 14 + Math.abs(Math.sin(t * 6 + i)) * -6, 46);
+      ptext(c.t, Wv / 2 + 10, y, 3, { align: "center" });
+    } else ptext(c.t, Wv / 2, y, 3, { align: "center" });
+  });
+  // los gatos caminan por abajo
+  CATS.forEach((d, i) => {
+    const x = ((t * 90 + i * 150) % (Wv + 300)) - 150, y = 698 + Math.abs(Math.sin(t * 10 + i)) * -6;
+    ctx.save(); ctx.translate(x, y); ctx.scale(1, 1); iconSprite(d.spr, 0, 0, 48); ctx.restore();
+  });
+  if ((t * 2 % 1) < .65) ptext(touchMode ? "TOCA PARA SALIR" : "ENTER PARA SALIR", Wv - 30, 20, 2, { align: "right", c: [.8, .8, .85] });
+}
+
+// =====================================================================
+//  HUD principal
+// =====================================================================
+function drawHUD() {
+  const u = CH / 720, Wv = CW / u, th = THEME, U = UI[th], t = performance.now() / 1000;
+  ctx.save(); ctx.scale(u, u);
+
+  if (started && !finished) {
+    // ---------- Arriba izquierda: vidas + puntos ----------
+    themedPanel(16, 16, 250, 92, th, t);
+    for (let i = 0; i < Math.max(lives, 3); i++) {
+      const on = i < lives, pop = (i === lives && uiFx.life > 0) ? uiFx.life * 2 : 0;
+      ptext("♥", 30 + i * 34, 26 - pop * 6 + (on ? Math.sin(t * 4 + i) * 1.5 : 0), 3, { c: on ? [1, .3, .38] : [.25, .2, .25], c2: on ? [.8, .12, .2] : [.18, .14, .18], o: U.dark });
+    }
+    if (lives > 3) ptext("×" + lives, 136, 30, 2, { c: U.text, o: U.dark });
+    ptext("PUNTOS", 30, 66, 2, { c: U.a2, o: U.dark });
+    const sp = uiFx.score > 0 ? 1 + uiFx.score : 1;
+    ptext(pad6(score), 116, 62 - (sp - 1) * 6, 3, { c: sp > 1 ? [1, 1, .6] : U.text, c2: sp > 1 ? U.a1 : shade(U.text, .82), o: U.dark });
+
+    // ---------- Arriba centro: pescados y cascabeles ----------
+    const cw = 330, cx = Wv / 2 - cw / 2;
+    themedPanel(cx, 16, cw, 64, th, t);
+    const fp = 1 + uiFx.fish * 1.2, bp = 1 + uiFx.bell * 1.2;
+    iconSprite(SPR.fish, cx + 40, 48, 26, fp);
+    ptext(fishCount + "/" + totalFish, cx + 66, 34, 3, { c: U.text, c2: shade(U.text, .8), o: U.dark });
+    iconSprite(SPR.bell, cx + 222, 48 + Math.sin(t * 5) * 1.5, 30, bp);
+    ptext(bells + "/3", cx + 246, 34, 3, { c: [1, .9, .35], c2: [1, .7, .15], o: U.dark });
+    ptext(clock(time), Wv / 2, 88, 2, { align: "center", c: U.text, o: U.dark, alpha: .85 });
+
+    // ---------- Arriba derecha: el mundo ----------
+    let rightPad = 16;
+    if (touchMode) rightPad += (40 * Math.min(innerWidth, innerHeight) / 100 * devicePixelRatio) / u;
+    worldPlaque(Wv - rightPad, 20, th, t);
+
+    // ---------- Letrero (consejo) ----------
+    if (hintT > 0 && hint && !won) {
+      const txt = touchMode ? mobileText(hint) : hint, px = 2, maxC = 58;
+      const lines = wrapChars(txt, maxC), w = Math.min(maxC, Math.max(...lines.map(l => l.length))) * 6 * px + 56, h = 30 + lines.length * 22, x = Wv / 2 - w / 2, y = 132;
+      themedPanel(x, y, w, h, th, t);
+      lines.forEach((l, i) => ptext(l, Wv / 2, y + 16 + i * 22, px, { align: "center", c: U.text, o: U.dark }));
+    }
+
+    // ---------- Mensaje rápido ----------
+    if (msgT > 0 && msg) {
+      const pop = Math.max(0, msgT - 1.75) * 4, px = 3 + pop;
+      ptext(msg, Wv / 2, 262 - pop * 10, px, { align: "center", c: U.a1, c2: U.a2, o: U.dark, alpha: Math.min(1, msgT * 2) });
+    }
+
+    // ---------- Puntos flotantes ----------
+    for (const p of popups) {
+      const k = 1 - p.t; ptext(p.text, toSX(p.x) / u, toSY(p.y + k * 1.2) / u, p.big ? 3 : 2, { align: "center", c: p.big ? [1, .9, .3] : [1, 1, 1], c2: p.big ? [1, .6, .2] : [1, .9, .5], o: [.1, .05, .1], alpha: Math.min(1, p.t * 3) });
+    }
+
+    // ---------- Barra de gatos (abajo) ----------
+    catRects = [];
+    const small = touchMode, cwd = small ? 86 : 104, chh = small ? 74 : 86, gap = small ? 8 : 12;
+    const bx = (Wv - (5 * cwd + 4 * gap)) / 2, by = 720 - chh - 14;
+    CATS.forEach((d, i) => {
+      const on = i === P.cat, x = bx + i * (cwd + gap), y = by - (on ? 10 + Math.sin(t * 5) * 2 : 0);
+      catRects.push([x, by - 14, cwd, chh + 14]);
+      if (on) themedPanel(x, y, cwd, chh, th, t);
+      else { ctx.fillStyle = css(U.dark, .75); ctx.fillRect(x - 3, y - 3, cwd + 6, chh + 6); ctx.fillStyle = css(U.bg, .8); ctx.fillRect(x, y, cwd, chh); }
+      ctx.globalAlpha = on ? 1 : .75; iconSprite(d.spr, x + cwd / 2, y + (small ? 27 : 31), small ? 42 : 50); ctx.globalAlpha = 1;
+      ptext(d.name, x + cwd / 2, y + chh - (small ? 25 : 28), 2, { align: "center", c: on ? U.a1 : U.text, c2: on ? U.a2 : shade(U.text, .8), o: U.dark, alpha: on ? 1 : .8 });
+      if (!small) ptext(String(i + 1), x + 8, y + 6, 2, { c: U.a2, o: U.dark, alpha: .9 });
+    });
+    // habilidad del gato elegido (aparece al cambiar)
+    if (abilityToast.t > 0 && hintT <= 0) {
+      const d = CATS[abilityToast.cat], txt = (touchMode ? d.ability.replace("S / Abajo en el aire", "▼ golpe en el aire").replace("mantén Espacio", "mantén SALTO").replace("pulsa Espacio", "toca SALTO") : d.ability).toUpperCase(), px = 2, lines = wrapChars(txt, 46);
+      const w = Math.max(...lines.map(l => l.length)) * 12 + 40, h = 20 + lines.length * 20, x = Wv / 2 - w / 2, y = by - h - 28;
+      ctx.globalAlpha = Math.min(1, abilityToast.t * 3);
+      themedPanel(x, y, w, h, th, t);
+      lines.forEach((l, i) => ptext(l, Wv / 2, y + 12 + i * 20, px, { align: "center", c: U.text, o: U.dark }));
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ---------- Pantalla de título ----------
+  levelRects = [];
+  if (!started) drawTitle(Wv, t);
+  if (won && !finished) drawWin(Wv, t);
+  if (gameOver) drawGameOver(Wv, t);
+  if (finished) { if (credits) drawCredits(Wv, t); else drawFinal(Wv, t); }
+  if (touchMode && CH > CW) {
+    ctx.fillStyle = "rgba(12,8,20,0.92)"; ctx.fillRect(0, 0, Wv, 720);
+    ptext("↻", Wv / 2, 220, 12, { align: "center", c: [1, .85, .25], c2: [1, .55, .15] });
+    wrapChars("GIRA TU CELULAR PARA JUGAR EN HORIZONTAL", 16).forEach((l, i) => ptext(l, Wv / 2, 370 + i * 34, 4, { align: "center" }));
+  }
+  ctx.restore();
+}
+
+function overlay(a) { ctx.fillStyle = `rgba(10,6,18,${a})`; ctx.fillRect(0, 0, 4000, 720); }
+
+function drawTitle(Wv, t) {
+  overlay(.72);
+  ptextWave("GATITOS AVENTUREROS", Wv / 2, 82, 8, { align: "center", c: [1, .85, .25], c2: [1, .5, .15], o: [.12, .05, .1] }, t, 6, 4);
+  // gatos desfilando
+  CATS.forEach((d, i) => {
+    const x = Wv / 2 - 260 + i * 130, y = 205 + Math.abs(Math.sin(t * 6 + i)) * -10;
+    iconSprite(d.spr, x, y, 64); ptext(d.name, x, 240, 2, { align: "center", c: [1, 1, 1], alpha: .9 });
+  });
+  const bw = 210, bh = 140, gap = 18, bx = (Wv - (5 * bw + 4 * gap)) / 2, by = 300;
+  LEVELS.forEach((L, i) => {
+    const th = THEME_OF_LEVEL[i], U = UI[th], x = bx + i * (bw + gap), open = i < unlocked, sel = i === selLevel;
+    const y = by - (sel ? 8 + Math.sin(t * 5) * 3 : 0);
+    levelRects.push([x, by - 10, bw, bh + 10]);
+    if (open) themedPanel(x, y, bw, bh, th, t);
+    else { ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(x - 4, y - 4, bw + 8, bh + 8); ctx.fillStyle = "#2a2530"; ctx.fillRect(x, y, bw, bh); }
+    ptext(U.label, x + bw / 2, y + 14, 2, { align: "center", c: open ? U.a2 : [.5, .5, .5], o: open ? U.dark : [.1, .1, .1] });
+    ptext(open ? String(i + 1) : "?", x + bw / 2, y + 38, 6, { align: "center", c: open ? U.a1 : [.45, .45, .5], c2: open ? U.a2 : [.35, .35, .4], o: open ? U.dark : [.1, .1, .1] });
+    wrapChars(open ? L.name.toUpperCase() : "BLOQUEADO", 14).forEach((l, j) => ptext(l, x + bw / 2, y + 100 + j * 18, 2, { align: "center", c: open ? U.text : [.55, .55, .6], o: open ? U.dark : [.1, .1, .1] }));
+    if (sel && open) ptext("▼", x + bw / 2, y - 34 + Math.sin(t * 6) * 4, 3, { align: "center", c: [1, .85, .25] });
+  });
+  const blink = (t * 2 % 1) < .65;
+  if (blink) ptext(touchMode ? "TOCA UN MUNDO PARA JUGAR" : "PULSA 1-5 PARA ELEGIR · CUALQUIER TECLA PARA JUGAR", Wv / 2, 480, 3, { align: "center", c: [1, 1, 1], c2: [1, .85, .5] });
+  ptext("RÉCORD " + pad6(record), Wv / 2, 528, 3, { align: "center", c: [1, .85, .25], c2: [1, .55, .15] });
+}
+
+function drawWin(Wv, t) {
+  overlay(.6); const U = UI[THEME];
+  const w = 640, h = 330, x = Wv / 2 - w / 2, y = 150;
+  themedPanel(x, y, w, h, THEME, t);
+  ptextWave("¡NIVEL COMPLETADO!", Wv / 2, y + 26, 5, { align: "center", c: U.a1, c2: U.a2, o: U.dark }, t, 4, 7);
+  const rows = [["PESCADOS", fishCount + "/" + totalFish], ["CASCABELES", bells + "/3"], ["TIEMPO", clock(time)], ["BONUS DE TIEMPO", "+" + winBonus], ["PUNTOS", pad6(score)]];
+  rows.forEach((r, i) => { ptext(r[0], x + 70, y + 100 + i * 34, 3, { c: U.text, o: U.dark }); ptext(r[1], x + w - 70, y + 100 + i * 34, 3, { align: "right", c: i === 4 ? U.a1 : U.text, c2: i === 4 ? U.a2 : shade(U.text, .8), o: U.dark }); });
+  if ((t * 2 % 1) < .65) ptext(touchMode ? "TOCA PARA CONTINUAR" : "ENTER PARA CONTINUAR · R REPETIR", Wv / 2, y + h + 24, 3, { align: "center", c: [1, 1, 1] });
+}
+
+function drawGameOver(Wv, t) {
+  overlay(.78);
+  ptextWave("GAME OVER", Wv / 2, 170, 12, { align: "center", c: [1, .3, .35], c2: [.75, .1, .2], o: [.1, .02, .05] }, t, 5, 3);
+  ptext("PUNTOS " + pad6(score), Wv / 2, 300, 4, { align: "center", c: [1, 1, 1] });
+  iconSprite(CATS[P.cat].spr, Wv / 2, 380 + Math.sin(t * 3) * 4, 70);
+  gameOverRects = [];
+  const bw = 260, bh = 64, gap = 40, bx = Wv / 2 - bw - gap / 2, by = 450;
+  [["CONTINUAR", "ENTER"], ["MENÚ", "ESC"]].forEach((b, i) => {
+    const x = bx + i * (bw + gap); gameOverRects.push([x, by, bw, bh]);
+    themedPanel(x, by, bw, bh, THEME, t);
+    ptext(b[0], x + bw / 2, by + 14, 3, { align: "center", c: UI[THEME].a1, c2: UI[THEME].a2, o: UI[THEME].dark });
+    if (!touchMode) ptext(b[1], x + bw / 2, by + bh + 10, 2, { align: "center", c: [.8, .8, .85] });
+  });
+  ptext("CONTINUAR = REPETIR EL NIVEL CON 3 VIDAS", Wv / 2, 560, 2, { align: "center", c: [.8, .8, .85] });
+}
+
+function drawFinal(Wv, t) {
+  overlay(.9);
+  ptextWave("¡GANASTE!", Wv / 2, 110, 12, { align: "center", c: [1, .85, .25], c2: [1, .5, .15], o: [.12, .05, .1] }, t, 6, 4);
+  ptext("NARITO, COWI, PUNKERO, ROCKERA Y RAPERA", Wv / 2, 245, 3, { align: "center" });
+  ptext("DERROTARON A LA ASPIRADORA. ¡GRACIAS POR JUGAR!", Wv / 2, 280, 3, { align: "center" });
+  CATS.forEach((d, i) => iconSprite(d.spr, Wv / 2 - 260 + i * 130, 370 + Math.abs(Math.sin(t * 6 + i)) * -14, 80));
+  ptext("PUNTOS " + pad6(score), Wv / 2, 440, 4, { align: "center", c: [1, 1, 1] });
+  ptext("RÉCORD " + pad6(record), Wv / 2, 490, 3, { align: "center", c: [1, .85, .25], c2: [1, .55, .15] });
+  if ((t * 2 % 1) < .65) ptext(touchMode ? "TOCA PARA VER LOS CRÉDITOS" : "ENTER PARA VER LOS CRÉDITOS", Wv / 2, 560, 3, { align: "center" });
+}
+
+
+// ------------------------- Arranque ---------------------------------
+buildArt(); resize(); LV = selLevel; resetGame();
+let last = performance.now(), acc = 0;
+function frame(now) {
+  acc += Math.min(.1, (now - last) / 1000); last = now;
+  while (acc >= DT) { update(DT); acc -= DT; }
+  render(); requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
