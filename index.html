@@ -8,8 +8,12 @@
 <title>Gatitos Aventureros</title>
 <style>
   html, body { margin: 0; height: 100%; background: #1b1424; overflow: hidden; }
-  html, body { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none; }
-  canvas { display: block; width: 100vw; height: 100vh; height: 100dvh; image-rendering: pixelated; }
+  html, body { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none;
+               -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+  /* pantalla fija: en iPhone evita que la página se mueva o se agrande */
+  html, body { position: fixed; inset: 0; width: 100%; height: 100%; }
+  * { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
 
   /* ---------- Controles táctiles (solo en celular / tablet) ---------- */
   #touch { display: none; position: fixed; inset: 0; pointer-events: none; }
@@ -639,6 +643,14 @@ function setTouch(on) { touchMode = on; document.body.classList.toggle("touch", 
 setTouch(touchMode);
 addEventListener("touchstart", () => { if (!touchMode) setTouch(true); }, { passive: true });
 addEventListener("contextmenu", e => e.preventDefault());
+// ---- iPhone / Safari: bloquear el zoom (doble toque y pellizco) ----
+["gesturestart", "gesturechange", "gestureend"].forEach(ev => document.addEventListener(ev, e => e.preventDefault(), { passive: false }));
+document.addEventListener("touchmove", e => { if (e.touches.length > 1 || e.scale !== undefined && e.scale !== 1) e.preventDefault(); e.preventDefault(); }, { passive: false });
+let lastTouchEnd = 0;
+document.addEventListener("touchend", e => { const now = Date.now(); if (now - lastTouchEnd < 350) e.preventDefault(); lastTouchEnd = now; }, { passive: false });
+document.addEventListener("dblclick", e => e.preventDefault(), { passive: false });
+// si Safari llegara a cambiar la escala, se reajusta el lienzo
+if (window.visualViewport) visualViewport.addEventListener("resize", () => { window.scrollTo(0, 0); resize(); });
 function vPress(k) { if (!held.has(k)) pressed.add(k); held.add(k); }
 function vRelease(k) { if (held.has(k)) { held.delete(k); released.add(k); } }
 
@@ -1044,6 +1056,7 @@ function snapCam() { const w = camWanted(); cam.x = w.x; cam.y = w.y; }
 const cv = document.getElementById("c"), ctx = cv.getContext("2d");
 function resize() { CW = cv.width = Math.floor(innerWidth * devicePixelRatio); CH = cv.height = Math.floor(innerHeight * devicePixelRatio); S = CH / VIEW_H; ctx.imageSmoothingEnabled = false; }
 addEventListener("resize", resize);
+addEventListener("orientationchange", () => setTimeout(() => { window.scrollTo(0, 0); resize(); }, 300));
 
 function update(dt) {
   if (finished) {
