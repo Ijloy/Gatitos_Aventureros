@@ -11,12 +11,12 @@
   html, body { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; overscroll-behavior: none;
                -webkit-text-size-adjust: 100%; text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
   /* pantalla fija: en iPhone evita que la página se mueva o se agrande */
-  html, body { position: fixed; inset: 0; width: 100%; height: 100%; }
+  html, body { position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; }
   * { touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
-  canvas { display: block; position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+  canvas { display: block; position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; image-rendering: pixelated; }
 
   /* ---------- Controles táctiles (solo en celular / tablet) ---------- */
-  #touch { display: none; position: fixed; inset: 0; pointer-events: none; }
+  #touch { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; pointer-events: none; }
   body.touch #touch { display: block; }
   .tbtn { position: absolute; pointer-events: auto; display: flex; align-items: center; justify-content: center;
           border-radius: 50%; background: rgba(20,12,30,0.35); border: 4px solid rgba(255,217,64,0.75);
@@ -61,6 +61,7 @@ const G = 9.81 * 3;          // gravedad (Physics2D * gravityScale 3)
 const DT = 1 / 60;
 const CLIMB = 5, GLIDE_FALL = -1.5, WIND_LIFT = 7, POUND = -24, MAX_FALL = -20;
 const VIEW_H = 14;           // bloques visibles en vertical
+const DPR = Math.min(2, window.devicePixelRatio || 1);   // resolución interna (máx. 2x para ir fluido)
 
 const WHITE = [1, .98, .95];
 const ORANGE = [1, .58, .2], BLACK = [.1, .1, .12], GRAY = [.5, .53, .6], BROWN = [.55, .4, .27], TABBY = [.6, .49, .36], TORBIE = [.56, .49, .4];
@@ -631,82 +632,112 @@ addEventListener("keydown", e => {
   if (GAME_KEYS.includes(e.code)) e.preventDefault();
   if (!held.has(e.code)) pressed.add(e.code); held.add(e.code);
   if (!started) { const m = /^(Digit|Numpad)([1-5])$/.exec(e.code); if (m && +m[2] <= unlocked) selLevel = +m[2] - 1; }
+  unlockAudio();
   if (!finished && !gameOver) startGame();
 });
 addEventListener("keyup", e => { held.delete(e.code); released.add(e.code); });
 addEventListener("blur", () => held.clear());
-addEventListener("pointerdown", () => { if (!finished) startGame(); });
 
 // ------------------------- Controles táctiles -----------------------
-let touchMode = matchMedia("(pointer: coarse)").matches;
+// Se usan "touch events" directamente: funcionan igual en Safari, Chrome, Firefox, Samsung Internet...
+// El juego revisa dónde está cada dedo y decide qué botón se está tocando.
+let touchMode = matchMedia("(pointer: coarse)").matches || ("ontouchstart" in window);
 function setTouch(on) { touchMode = on; document.body.classList.toggle("touch", on); }
 setTouch(touchMode);
-addEventListener("touchstart", () => { if (!touchMode) setTouch(true); }, { passive: true });
 addEventListener("contextmenu", e => e.preventDefault());
-// ---- iPhone / Safari: bloquear el zoom (doble toque y pellizco) ----
 ["gesturestart", "gesturechange", "gestureend"].forEach(ev => document.addEventListener(ev, e => e.preventDefault(), { passive: false }));
-document.addEventListener("touchmove", e => { if (e.touches.length > 1 || e.scale !== undefined && e.scale !== 1) e.preventDefault(); e.preventDefault(); }, { passive: false });
-let lastTouchEnd = 0;
-document.addEventListener("touchend", e => { const now = Date.now(); if (now - lastTouchEnd < 350) e.preventDefault(); lastTouchEnd = now; }, { passive: false });
 document.addEventListener("dblclick", e => e.preventDefault(), { passive: false });
-// si Safari llegara a cambiar la escala, se reajusta el lienzo
 if (window.visualViewport) visualViewport.addEventListener("resize", () => { window.scrollTo(0, 0); resize(); });
+
 function vPress(k) { if (!held.has(k)) pressed.add(k); held.add(k); }
 function vRelease(k) { if (held.has(k)) { held.delete(k); released.add(k); } }
-
-// Botones que equivalen a una tecla (salto, golpe)
-document.querySelectorAll(".tbtn[data-key]").forEach(b => {
-  const k = b.dataset.key;
-  const down = e => { e.preventDefault(); e.stopPropagation(); try { b.setPointerCapture(e.pointerId); } catch (_) { } startGame(); vPress(k); b.classList.add("on"); };
-  const up = e => { e.preventDefault(); vRelease(k); b.classList.remove("on"); };
-  b.addEventListener("pointerdown", down);
-  ["pointerup", "pointercancel", "lostpointercapture"].forEach(ev => b.addEventListener(ev, up));
-});
-
-// Cruceta: se puede deslizar el dedo entre izquierda y derecha
-const dpad = document.getElementById("dpad"), halves = dpad.querySelectorAll(".half");
-const dpadTouches = new Map();
-function dpadUpdate() {
-  let dir = 0; for (const d of dpadTouches.values()) dir = d;
-  dir < 0 ? vPress("ArrowLeft") : vRelease("ArrowLeft");
-  dir > 0 ? vPress("ArrowRight") : vRelease("ArrowRight");
-  halves[0].classList.toggle("on", dir < 0); halves[1].classList.toggle("on", dir > 0);
+function unlockAudio() {
+  if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { } }
+  if (actx && actx.state === "suspended" && actx.resume) actx.resume();
 }
-function dpadDir(e) { const r = dpad.getBoundingClientRect(); return e.clientX < r.left + r.width / 2 ? -1 : 1; }
-dpad.addEventListener("pointerdown", e => { e.preventDefault(); e.stopPropagation(); try { dpad.setPointerCapture(e.pointerId); } catch (_) { } startGame(); dpadTouches.set(e.pointerId, dpadDir(e)); dpadUpdate(); });
-dpad.addEventListener("pointermove", e => { if (dpadTouches.has(e.pointerId)) { dpadTouches.set(e.pointerId, dpadDir(e)); dpadUpdate(); } });
-["pointerup", "pointercancel", "lostpointercapture"].forEach(ev => dpad.addEventListener(ev, e => { dpadTouches.delete(e.pointerId); dpadUpdate(); }));
 
-// Botones pequeños de arriba
-function tapBtn(id, fn) { document.getElementById(id).addEventListener("pointerdown", e => { e.preventDefault(); e.stopPropagation(); if (!finished) startGame(); fn(); }); }
-tapBtn("bReset", () => { resetGame(); flash("¡A intentarlo de nuevo!"); });
-tapBtn("bMute", () => { muted = !muted; document.getElementById("bMute").textContent = muted ? "✕" : "♪"; flash(muted ? "Sonido apagado" : "Sonido encendido"); });
+const dpad = document.getElementById("dpad"), halves = dpad.querySelectorAll(".half");
+const BTN_KEYS = [["bJump", "Space"], ["bDown", "ArrowDown"]];
+const $ = id => document.getElementById(id);
+function inRect(el, x, y, pad) {
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad;
+}
+function controlAt(x, y) {                  // ¿qué control hay bajo el dedo?
+  if (inRect(dpad, x, y, 14)) { const r = dpad.getBoundingClientRect(); return x < r.left + r.width / 2 ? "ArrowLeft" : "ArrowRight"; }
+  for (const [id, k] of BTN_KEYS) if (inRect($(id), x, y, 12)) return k;
+  return null;
+}
+const SMALL = {
+  bReset: () => { score = levelStartScore; resetGame(); flash("¡A intentarlo de nuevo!"); },
+  bMute: () => { muted = !muted; $("bMute").textContent = muted ? "✕" : "♪"; flash(muted ? "Sonido apagado" : "Sonido encendido"); },
+  bFull: () => {
+    const el = document.documentElement;
+    if (document.fullscreenElement || document.webkitFullscreenElement) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    if (req) Promise.resolve(req.call(el)).then(() => { if (screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(() => { }); }).catch(() => { });
+  },
+};
 const fsOK = document.fullscreenEnabled || document.webkitFullscreenEnabled;
-if (!fsOK) document.getElementById("bFull").style.display = "none";
-tapBtn("bFull", () => {
-  const el = document.documentElement;
-  if (document.fullscreenElement || document.webkitFullscreenElement) { (document.exitFullscreen || document.webkitExitFullscreen).call(document); return; }
-  const req = el.requestFullscreen || el.webkitRequestFullscreen;
-  if (req) Promise.resolve(req.call(el)).then(() => { if (screen.orientation && screen.orientation.lock) screen.orientation.lock("landscape").catch(() => { }); }).catch(() => { });
-});
+if (!fsOK) $("bFull").style.display = "none";
+function smallAt(x, y) { for (const id in SMALL) if ($(id).style.display !== "none" && inRect($(id), x, y, 6)) return id; return null; }
 
-// Tocar un gato en la barra para cambiar
+const fingers = new Map();      // dedo -> { x, y, small }
+let vHeld = new Set();
+function syncButtons() {
+  const want = new Set();
+  for (const f of fingers.values()) { const k = controlAt(f.x, f.y); if (k) want.add(k); }
+  for (const k of want) if (!vHeld.has(k)) vPress(k);
+  for (const k of vHeld) if (!want.has(k)) vRelease(k);
+  vHeld = want;
+  halves[0].classList.toggle("on", want.has("ArrowLeft")); halves[1].classList.toggle("on", want.has("ArrowRight"));
+  for (const [id, k] of BTN_KEYS) $(id).classList.toggle("on", want.has(k));
+}
+function onTouch(e) {
+  e.preventDefault();                       // sin zoom, sin scroll, sin doble toque
+  if (!touchMode) setTouch(true);
+  const list = e.changedTouches;
+  for (let i = 0; i < list.length; i++) {
+    const t = list[i], id = t.identifier, x = t.clientX, y = t.clientY;
+    if (e.type === "touchstart") {
+      const sm = smallAt(x, y);
+      fingers.set(id, { x, y, small: sm });
+      if (sm) continue;                      // los botones pequeños actúan al soltar
+      if (controlAt(x, y)) { if (!finished && !gameOver) startGame(); }
+      else canvasTap(x, y);
+    } else if (e.type === "touchmove") {
+      const f = fingers.get(id); if (f) { f.x = x; f.y = y; }
+    } else {                                 // touchend / touchcancel
+      const f = fingers.get(id);
+      fingers.delete(id);
+      if (e.type === "touchend") {
+        unlockAudio();
+        if (f && f.small && smallAt(x, y) === f.small) { if (!finished && !gameOver) startGame(); SMALL[f.small](); }
+      }
+    }
+  }
+  if (e.touches && e.touches.length === 0) fingers.clear();
+  syncButtons();
+}
+["touchstart", "touchmove", "touchend", "touchcancel"].forEach(ev => document.addEventListener(ev, onTouch, { passive: false }));
+// Si la pestaña pierde el foco, se sueltan todos los botones
+addEventListener("blur", () => { fingers.clear(); syncButtons(); });
+document.addEventListener("visibilitychange", () => { if (document.hidden) { fingers.clear(); syncButtons(); held.clear(); } });
+
+// Toques / clics sobre el juego: menú, elegir mundo, continuar, cambiar de gato
 let catRects = [];
-document.getElementById("c").addEventListener("pointerdown", e => {
-  const u = CH / 720, vx = e.clientX * devicePixelRatio / u, vy = e.clientY * devicePixelRatio / u;
-  if (finished) { e.stopPropagation(); if (credits) backToTitle(); else { credits = true; creditsT = 0; } return; }
-  if (gameOver) {
-    e.stopPropagation();
-    gameOverRects.forEach((r, i) => { if (vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3]) { if (i === 0) continueLevel(); else backToTitle(); } });
-    return;
-  }
-  if (!started) {
-    levelRects.forEach((r, i) => { if (i < unlocked && vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3]) selLevel = i; });
-    startGame(); return;
-  }
+function canvasTap(clientX, clientY) {
+  unlockAudio();
+  const u = CH / 720, vx = clientX * DPR / u, vy = clientY * DPR / u;
+  const hit = r => vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3];
+  if (finished) { if (credits) backToTitle(); else { credits = true; creditsT = 0; } return; }
+  if (gameOver) { gameOverRects.forEach((r, i) => { if (hit(r)) { if (i === 0) continueLevel(); else backToTitle(); } }); return; }
+  if (!started) { levelRects.forEach((r, i) => { if (i < unlocked && hit(r)) selLevel = i; }); startGame(); return; }
   if (won) { nextLevel(); return; }
-  catRects.forEach((r, i) => { if (vx >= r[0] && vx <= r[0] + r[2] && vy >= r[1] && vy <= r[1] + r[3]) trySwitch(i); });
-});
+  catRects.forEach((r, i) => { if (hit(r)) trySwitch(i); });
+}
+// Con mouse (computadora)
+$("c").addEventListener("mousedown", e => { canvasTap(e.clientX, e.clientY); });
 
 const H_ = c => held.has(c), P_ = c => pressed.has(c), R_ = c => released.has(c);
 const inp = {
@@ -1054,7 +1085,7 @@ function snapCam() { const w = camWanted(); cam.x = w.x; cam.y = w.y; }
 
 // ------------------------- Bucle principal --------------------------
 const cv = document.getElementById("c"), ctx = cv.getContext("2d");
-function resize() { CW = cv.width = Math.floor(innerWidth * devicePixelRatio); CH = cv.height = Math.floor(innerHeight * devicePixelRatio); S = CH / VIEW_H; ctx.imageSmoothingEnabled = false; }
+function resize() { CW = cv.width = Math.floor(innerWidth * DPR); CH = cv.height = Math.floor(innerHeight * DPR); S = CH / VIEW_H; ctx.imageSmoothingEnabled = false; }
 addEventListener("resize", resize);
 addEventListener("orientationchange", () => setTimeout(() => { window.scrollTo(0, 0); resize(); }, 300));
 
@@ -1569,7 +1600,7 @@ function drawHUD() {
 
     // ---------- Arriba derecha: el mundo ----------
     let rightPad = 16;
-    if (touchMode) rightPad += (40 * Math.min(innerWidth, innerHeight) / 100 * devicePixelRatio) / u;
+    if (touchMode) rightPad += (40 * Math.min(innerWidth, innerHeight) / 100 * DPR) / u;
     worldPlaque(Wv - rightPad, 20, th, t);
 
     // ---------- Letrero (consejo) ----------
